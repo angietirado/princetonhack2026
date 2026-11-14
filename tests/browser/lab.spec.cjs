@@ -409,6 +409,52 @@ test('changing a draft invalidates previously calculated investigation proposals
   await expect(page.locator('[data-investigation-apply]').first()).toBeDisabled();
   await expect(page.locator('#investigation-status')).toContainText('Check again');
 });
+test('analytics audit keeps exact cohorts separate and resets when filters change', async ({ page }) => {
+  const errors = observe(page);
+  await readyAnalytics(page, 'demo');
+  await page.locator('#audit-budget-increase').fill('2');
+  await page.locator('#audit-time-increase').fill('5');
+  const pending = page.waitForResponse(res => new URL(res.url()).pathname === '/api/v1/analytics/audit');
+  await page.locator('#audit-button').click();
+  const response = await pending;
+  expect(response.status()).toBe(200);
+  const url = new URL(response.url());
+  expect(url.searchParams.get('data_mode')).toBe('demo');
+  expect(url.searchParams.get('budget_delta_cents')).toBe('200');
+  expect(url.searchParams.get('time_delta_minutes')).toBe('5');
+  const report = await response.json();
+  expect(report.cohorts.length).toBeGreaterThan(0);
+  for (const cohort of report.cohorts) {
+    const counts = cohort.counts;
+    expect(counts.selected_plan_fits + counts.other_plan_fits + counts.no_plan_fits + counts.needs_review).toBe(counts.initial_choices);
+    expect(cohort.is_demo).toBe(true);
+  }
+  await expect(page.locator('#audit-results')).toBeVisible();
+  await expect(page.locator('#audit-cohort option')).toHaveCount(report.cohorts.length);
+  const walletCohort = report.cohorts.find(cohort => cohort.financial_context?.profile_name === 'Tight week');
+  expect(walletCohort).toBeTruthy();
+  await page.locator('#audit-cohort').selectOption(walletCohort.id);
+  await expect(page.locator('#audit-cohort-context')).toContainText('Tight week');
+  await page.setViewportSize({ width: 375, height: 812 });
+  await noPageOverflow(page);
+  // Capture a real viewport at mobile width; a tall element stitch can incorrectly
+  // draw offscreen fixed skip links into the middle of the artifact.
+  await page.setViewportSize({ width: 375, height: 1900 });
+  await page.evaluate(() => window.scrollTo({ top: scrollY + document.getElementById('audit-panel').getBoundingClientRect().top - 12, behavior: 'instant' }));
+  await page.screenshot({ path: '/artifacts/analytics-audit-mobile.png', animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.locator('.audit-example-disclosure > summary').click();
+  const example = page.locator('#audit-examples [data-session-id]').first();
+  await expect(example).toBeVisible();
+  await example.click();
+  await expect(page.locator('#session-dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(example).toBeFocused();
+  await page.getByRole('radio', { name: 'Participants', exact: true }).check();
+  await expect(page.locator('#results')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#audit-results')).toBeHidden();
+  expect(errors).toEqual([]);
+});
 test('a money-or-time question changes the highlighted option without changing the saved choice', async ({ page, request }) => {
   const session = await startDemo(page, { budget: '45', time: '15', stops: '1', wallet: 'steady' });
   await chooseWholeStore(page);

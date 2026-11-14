@@ -6,7 +6,7 @@
   const moneyFormat = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
   const numbers = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
   const dates = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const state = { mode: 'participants', scenario: '', offset: 0, total: 0, token: '', generation: 0, controller: null, detailController: null, detailGeneration: 0, summary: null, scenarios: [], returnFocus: null, busy: false, pageBusy: false };
+  const state = { mode: 'participants', scenario: '', offset: 0, total: 0, token: '', generation: 0, controller: null, detailController: null, detailGeneration: 0, summary: null, scenarios: [], returnFocus: null, busy: false, pageBusy: false, audit: null, auditBusy: false, auditController: null, auditGeneration: 0 };
   const text = (id, value) => { $(id).textContent = value; };
   const finite = (v) => typeof v === 'number' && Number.isFinite(v);
   const count = (v) => finite(v) ? Math.max(0, Math.trunc(v)) : 0;
@@ -46,6 +46,7 @@
   }
   function setBusy(busy) {
     state.busy = busy; $('results').setAttribute('aria-busy', String(busy));
+    $('audit-button').disabled = busy || state.auditBusy;
     $('refresh-button').disabled = busy; $('export-button').disabled = busy || !state.summary;
     text('loading-status', busy ? 'Loading experiment results.' : 'Experiment results updated.');
     updatePagination();
@@ -183,6 +184,7 @@
     updatePagination();
   }
   async function refresh() {
+    resetAudit();
     const generation = ++state.generation;
     if (state.controller) state.controller.abort();
     state.controller = new AbortController(); state.offset = 0; state.pageBusy = false;
@@ -202,6 +204,154 @@
       if (error.status === 401 || error.status === 403) openAccess(true);
     } finally { if (generation === state.generation) { setBusy(false); if (!state.summary) text('loading-status', 'Results could not be loaded.'); } }
   }
+  const auditCategories = [
+    ['selected_plan_fits', 'Selected plan fits', 'The recorded plan fits all modeled limits.'],
+    ['other_plan_fits', 'Another plan fits', 'The recorded plan fails a limit; another complete basket fits.'],
+    ['no_plan_fits', 'No plan fits', 'No complete basket fits the original limits.'],
+    ['needs_review', 'Needs review', 'Wallet uncertainty prevents a confident feasibility claim.']
+  ];
+  const auditOutcomes = [...auditCategories, ['newly_feasible_under_probe', 'Newly feasible under probe'], ['modeled_dominated', 'Modeled dominance']];
+  function resetAudit(message) {
+    state.auditGeneration++;
+    state.auditController?.abort(); state.auditController = null; state.audit = null; state.auditBusy = false;
+    $('audit-panel').setAttribute('aria-busy', 'false'); $('audit-button').disabled = state.busy;
+    $('audit-results').hidden = true; $('audit-cohort-view').hidden = true; $('audit-error').hidden = true;
+    ['audit-error', 'audit-coverage', 'audit-cohort-context', 'audit-method-context'].forEach((id) => text(id, ''));
+    ['audit-cohort', 'audit-classifications', 'audit-probe-results', 'audit-examples'].forEach((id) => $(id).replaceChildren());
+    $('audit-cohort-context').removeAttribute('title');
+    text('audit-status', message || 'Run when needed. No audit has been loaded.');
+  }
+  function auditInput() {
+    const dollars = $('audit-budget-increase').value.trim(), time = $('audit-time-increase').value.trim();
+    if (!/^\d+(?:\.\d{1,2})?$/.test(dollars) || Number(dollars) > 100) {
+      $('audit-budget-increase').focus(); throw new Error('Enter a budget increase from $0 to $100, with at most two decimal places.');
+    }
+    if (!/^\d+$/.test(time) || Number(time) > 120) {
+      $('audit-time-increase').focus(); throw new Error('Enter a time increase from 0 to 120 whole minutes.');
+    }
+    const parts = dollars.split('.');
+    return { budget_delta_cents: Number(parts[0]) * 100 + Number((parts[1] || '').padEnd(2, '0')), time_delta_minutes: Number(time) };
+  }
+  function validAudit(payload, probe) {
+    const n = (v) => Number.isSafeInteger(v) && v >= 0;
+    const limits = (c) => c && n(c.budget_cents) && finite(c.time_budget_minutes) && c.time_budget_minutes >= 0 && ['walk', 'drive'].includes(c.travel_mode) && Number.isInteger(c.max_stores) && c.max_stores >= 1;
+    const totals = ['total_sessions', 'selected_sessions', 'analyzed_sessions', 'skipped_no_initial_sessions', 'skipped_invalid_initial_sessions', 'max_sessions'];
+    if (!payload || !totals.every((key) => n(payload[key])) || payload.max_sessions < 1 || payload.max_sessions > 200
+      || payload.selected_sessions > payload.max_sessions || payload.selected_sessions > payload.total_sessions
+      || payload.selected_sessions !== payload.analyzed_sessions + payload.skipped_no_initial_sessions + payload.skipped_invalid_initial_sessions
+      || typeof payload.truncated !== 'boolean' || payload.truncated !== (payload.total_sessions > payload.selected_sessions)
+      || payload.data_mode !== state.mode || (payload.scenario_id || '') !== state.scenario
+      || payload.probe?.budget_delta_cents !== probe.budget_delta_cents || payload.probe?.time_delta_minutes !== probe.time_delta_minutes
+      || !Array.isArray(payload.cohorts) || payload.cohorts.length > payload.analyzed_sessions) return false;
+    const ids = new Set(); let classified = 0;
+    for (const cohort of payload.cohorts) {
+      const c = cohort?.counts, d = cohort?.denominators;
+      if (!cohort || typeof cohort.id !== 'string' || !cohort.id || ids.has(cohort.id) || typeof cohort.scenario_hash !== 'string'
+        || typeof cohort.is_demo !== 'boolean' || !limits(cohort.initial_constraints) || !limits(cohort.probe_constraints)
+        || !c || !d || !['initial_choices', ...auditOutcomes.map(([key]) => key)].every((key) => n(c[key]))
+        || !['classified_initial_choices', 'probe_eligible_initial_choices', 'baseline_no_feasible_initial_choices', 'dominance_eligible_initial_choices'].every((key) => n(d[key]))
+        || c.initial_choices < 1 || auditCategories.reduce((sum, [key]) => sum + c[key], 0) !== c.initial_choices
+        || d.classified_initial_choices !== c.initial_choices || d.probe_eligible_initial_choices !== c.initial_choices - c.needs_review
+        || d.baseline_no_feasible_initial_choices !== c.no_plan_fits || d.dominance_eligible_initial_choices !== c.selected_plan_fits
+        || c.newly_feasible_under_probe > d.baseline_no_feasible_initial_choices || c.modeled_dominated > d.dominance_eligible_initial_choices) return false;
+      ids.add(cohort.id); classified += c.initial_choices;
+    }
+    return classified === payload.analyzed_sessions;
+  }
+  function auditLimits(c) {
+    const exactTime = new Intl.NumberFormat('en-US', { maximumFractionDigits: 20 }).format(c.time_budget_minutes) + ' min';
+    return money(c.budget_cents) + ' · ' + exactTime + ' · ' + (c.travel_mode === 'walk' ? 'walking' : 'driving') + ' · ' + plural(c.max_stores, 'store');
+  }
+  function auditWalletName(cohort) {
+    return typeof cohort.financial_context?.profile_name === 'string' ? cohort.financial_context.profile_name : cohort.wallet_attached ? 'Frozen wallet' : 'No wallet';
+  }
+  function renderAuditCohort() {
+    const cohort = state.audit?.cohorts.find((item) => item.id === $('audit-cohort').value);
+    if (!cohort) return;
+    const c = cohort.counts, d = cohort.denominators, wallet = cohort.financial_context;
+    let walletNote = 'No wallet attached; only stated shopping limits apply.';
+    if (wallet || cohort.wallet_attached) {
+      const source = wallet?.source === 'fixture' ? 'Synthetic fixture' : wallet?.source === 'nessie' ? 'Frozen Nessie snapshot' : 'Unverified source';
+      walletNote = auditWalletName(cohort) + ' · ' + source + '. ' + (wallet?.status === 'needs_review' || !finite(wallet?.spendable_now_cents)
+        ? 'Wallet availability needs review; no confident affordability claim.' : 'Fixed current shopping cash: ' + money(wallet.spendable_now_cents) + '.');
+    }
+    text('audit-cohort-context', (cohort.is_demo ? 'Demonstration choices' : 'Participant submissions') + ' · ' +
+      (cohort.scenario_name || cohort.scenario_id) + ' · scenario ' + (shortId(cohort.scenario_version) || 'unknown version') +
+      (cohort.world_version ? ' · world ' + shortId(cohort.world_version) : '') + ' · snapshot ' + shortId(cohort.scenario_hash) +
+      '. Initial limits: ' + auditLimits(cohort.initial_constraints) + '. ' + walletNote + ' Counts below refer only to this exact cohort.');
+    $('audit-cohort-context').title = 'Scenario version: ' + (cohort.scenario_version || 'unknown') +
+      (cohort.world_version ? ' · World version: ' + cohort.world_version : '') + ' · Snapshot: ' + cohort.scenario_hash;
+    $('audit-classifications').replaceChildren(...auditCategories.map(([key, label, description]) => {
+      const item = make('div'); item.dataset.auditOutcome = key;
+      item.append(make('dt', '', label), make('dd', '', c[key] + ' / ' + d.classified_initial_choices), make('p', '', description + ' Out of ' + plural(d.classified_initial_choices, 'valid initial choice') + '.'));
+      return item;
+    }));
+    const probe = state.audit.probe, probeCard = make('section', 'audit-probe-card'), dominanceCard = make('section', 'audit-probe-card');
+    probeCard.append(make('h3', '', 'Newly feasible under this probe'), make('strong', '', d.baseline_no_feasible_initial_choices ? c.newly_feasible_under_probe + ' / ' + d.baseline_no_feasible_initial_choices : 'Not applicable'));
+    probeCard.append(make('p', '', d.baseline_no_feasible_initial_choices
+      ? 'Of ' + plural(d.baseline_no_feasible_initial_choices, 'initial choice') + ' with no feasible basket at baseline, ' + c.newly_feasible_under_probe + ' gain a modeled feasible basket.'
+      : 'No baseline no-plan-fits choices in this cohort; there is no eligible denominator.'));
+    probeCard.append(make('p', '', 'Probe: +' + money(probe.budget_delta_cents) + ' and +' + minutes(probe.time_delta_minutes) +
+      (probe.budget_delta_cents && probe.time_delta_minutes ? ', applied together.' : '.') + ' Effective limits: ' + auditLimits(cohort.probe_constraints) + '.' +
+      (cohort.probe_clipped_by_app_bounds ? ' The app maximum capped this increase.' : '') + ' Wallet cash stays fixed.'));
+    text('audit-method-context', 'Classification denominators include every valid initial choice in this cohort. ' + plural(d.probe_eligible_initial_choices, 'initial choice') + ' have a verifiable wallet or no attached wallet; ' + c.needs_review + ' needs-review cases are excluded from probe and dominance denominators. The newly-feasible denominator includes only baseline no-plan-fits choices. This is a modeled comparison, not an observed response to larger limits. Dominance uses the original limits and excludes infeasible selections. Unrecorded preferences may matter; these results do not explain motives, measure real purchases, or estimate a causal effect.');
+    dominanceCard.append(make('h3', '', 'Modeled dominance'), make('strong', '', d.dominance_eligible_initial_choices ? c.modeled_dominated + ' / ' + d.dominance_eligible_initial_choices : 'Not applicable'));
+    dominanceCard.append(make('p', '', d.dominance_eligible_initial_choices
+      ? 'Of ' + plural(d.dominance_eligible_initial_choices, 'feasible selected plan') + ', ' + c.modeled_dominated + ' have a feasible alternative costing no more and taking no longer, with at least one strict improvement.'
+      : 'No feasible selected plans in this cohort; there is no eligible denominator.'));
+
+    $('audit-probe-results').replaceChildren(probeCard, dominanceCard);
+    const examples = [];
+    auditOutcomes.forEach(([key, label]) => {
+      const ids = Array.isArray(cohort.example_ids?.[key]) ? [...new Set(cohort.example_ids[key].filter((id) => typeof id === 'string' && id))].slice(0, 3) : [];
+      if (!c[key] || !ids.length) return;
+      const group = make('div', 'audit-example-group'), buttons = make('div');
+      ids.forEach((id) => {
+        const button = make('button', 'button button-outline', shortId(id)); button.type = 'button'; button.dataset.sessionId = id;
+        button.setAttribute('aria-label', 'Open ' + label.toLowerCase() + ' example session ' + shortId(id)); buttons.append(button);
+      });
+      group.append(make('h4', '', label), buttons); examples.push(group);
+    });
+    $('audit-examples').replaceChildren(...(examples.length ? examples : [make('p', 'audit-note', 'No example sessions were supplied for this cohort.')]));
+  }
+  function renderAudit(payload) {
+    state.audit = payload; $('audit-results').hidden = false;
+    text('audit-coverage', (payload.truncated ? 'Truncated to the latest ' + payload.max_sessions + ' matching sessions. ' : 'All matching sessions selected (limit ' + payload.max_sessions + '). ') +
+      'Selected ' + payload.selected_sessions + ' of ' + plural(payload.total_sessions, 'matching session') + '; analyzed ' + plural(payload.analyzed_sessions, 'valid initial choice') +
+      '. Skipped: ' + payload.skipped_no_initial_sessions + ' without an initial choice; ' + payload.skipped_invalid_initial_sessions + ' with an invalid initial record. ' +
+      'Selection is newest session first, then session ID; not a random sample. Only the earliest initial choice per session counts.');
+    $('audit-cohort-view').hidden = !payload.cohorts.length;
+    if (!payload.cohorts.length) { text('audit-status', 'No valid initial choices to audit in this view. The selection and skipped records are shown below.'); return; }
+    $('audit-cohort').replaceChildren(...payload.cohorts.map((cohort) => {
+      const option = make('option', '', (cohort.scenario_name || cohort.scenario_id) + ' · ' + auditLimits(cohort.initial_constraints) + ' · ' + auditWalletName(cohort) +
+        ' · ' + (cohort.is_demo ? 'Demo' : 'Participants') + ' · ' + shortId(cohort.id)); option.value = cohort.id; return option;
+    }));
+    text('audit-status', 'Audit ready: ' + plural(payload.cohorts.length, 'exact cohort') + '. Select one to inspect its modeled results.');
+    renderAuditCohort();
+  }
+  async function runAudit(event) {
+    event.preventDefault(); if (state.busy || state.auditBusy) return;
+    resetAudit();
+    let probe;
+    try { probe = auditInput(); }
+    catch (error) { $('audit-error').hidden = false; text('audit-error', error.message); text('audit-status', 'Check the probe values, then run the audit.'); return; }
+    const generation = state.auditGeneration;
+    state.auditBusy = true; state.auditController = new AbortController(); $('audit-button').disabled = true;
+    $('audit-panel').setAttribute('aria-busy', 'true'); text('audit-status', 'Checking initial choices against the frozen simulation…');
+    try {
+      const payload = await request('/analytics/audit?' + query(probe), state.auditController.signal);
+      if (generation !== state.auditGeneration) return;
+      if (!validAudit(payload, probe)) throw new Error('The audit returned incomplete or inconsistent counts. Run it again to request a fresh result.');
+      renderAudit(payload);
+    } catch (error) {
+      if (generation !== state.auditGeneration || error.name === 'AbortError') return;
+      $('audit-error').hidden = false; text('audit-error', error.message); text('audit-status', 'Audit unavailable. Run it again to retry.');
+      if (error.status === 401 || error.status === 403) openAccess(true);
+    } finally {
+      if (generation === state.auditGeneration) { state.auditBusy = false; $('audit-button').disabled = state.busy; $('audit-panel').setAttribute('aria-busy', 'false'); }
+    }
+  }
+
   async function loadPage(nextOffset) {
     if (state.busy || state.pageBusy) return;
     const generation = state.generation, oldOffset = state.offset;
@@ -285,6 +435,11 @@
     if (['http:', 'https:'].includes(participant.protocol)) { $('participant-link').href = participant.href; $('empty-challenge-link').href = participant.href; }
     $('data-modes').addEventListener('change', (event) => { if (event.target.name !== 'data-mode' || !['participants', 'demo', 'all'].includes(event.target.value)) return; state.mode = event.target.value; closeDetailIfOpen(); refresh(); });
     $('scenario-filter').addEventListener('change', () => { state.scenario = $('scenario-filter').value; closeDetailIfOpen(); refresh(); });
+    $('audit-form').addEventListener('submit', runAudit);
+    $('audit-cohort').addEventListener('change', renderAuditCohort);
+    ['audit-budget-increase', 'audit-time-increase'].forEach((id) => {
+      ['input', 'change'].forEach((name) => $(id).addEventListener(name, () => resetAudit('Probe changed. Run the audit to check these values.')));
+    });
     $('refresh-button').addEventListener('click', refresh); $('export-button').addEventListener('click', exportCsv);
     $('previous-page').addEventListener('click', () => loadPage(state.offset - PAGE_SIZE)); $('next-page').addEventListener('click', () => loadPage(state.offset + PAGE_SIZE));
     $('access-toggle').addEventListener('click', () => { const expanded = $('access-panel').hidden; $('access-panel').hidden = !expanded; $('access-toggle').setAttribute('aria-expanded', String(expanded)); if (expanded) $('access-token').focus(); });

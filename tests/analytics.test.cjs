@@ -268,3 +268,277 @@ test('same-named stores remain distinct by scenario, with historical names and I
     assert.match(app.document.getElementById('store-chart').textContent, /Corner Market/);
   } finally { app.close(); }
 });
+
+
+function auditCohort(overrides = {}) {
+  return {
+    id: 'cohort-a1234567', scenario_id: scenario.id, scenario_name: scenario.name, scenario_version: 'v1',
+    scenario_hash: 'snapshot-a123456789', world_version: 'houston-2026', is_demo: false,
+    initial_constraints: { ...constraints }, probe_constraints: { ...constraints }, probe_clipped_by_app_bounds: false,
+    wallet_attached: false, wallet_source: null, financial_context: null,
+    counts: { initial_choices: 8, selected_plan_fits: 4, other_plan_fits: 2, no_plan_fits: 2, needs_review: 0, newly_feasible_under_probe: 0, modeled_dominated: 2 },
+    denominators: { classified_initial_choices: 8, probe_eligible_initial_choices: 8, baseline_no_feasible_initial_choices: 2, dominance_eligible_initial_choices: 4 },
+    example_ids: { selected_plan_fits: ['session-1'], other_plan_fits: ['session-2'], no_plan_fits: ['session-3'], needs_review: [], newly_feasible_under_probe: [], modeled_dominated: ['session-1'] },
+    ...overrides
+  };
+}
+function auditPayload(url, overrides = {}) {
+  const budget = Number(url.searchParams.get('budget_delta_cents')), time = Number(url.searchParams.get('time_delta_minutes'));
+  const mode = url.searchParams.get('data_mode');
+  const cohorts = overrides.cohorts || [auditCohort({
+    is_demo: mode === 'demo',
+    probe_constraints: { ...constraints, budget_cents: constraints.budget_cents + budget, time_budget_minutes: constraints.time_budget_minutes + time },
+    counts: { ...auditCohort().counts, newly_feasible_under_probe: budget || time ? 1 : 0 }
+  })];
+  const analyzed = cohorts.reduce((sum, cohort) => sum + cohort.counts.initial_choices, 0);
+  return {
+    data_mode: mode, scenario_id: url.searchParams.get('scenario_id'), probe: { budget_delta_cents: budget, time_delta_minutes: time, combined: Boolean(budget && time) },
+    total_sessions: analyzed + 2, selected_sessions: analyzed + 2, analyzed_sessions: analyzed,
+    skipped_no_initial_sessions: 1, skipped_invalid_initial_sessions: 1, truncated: false, max_sessions: 200,
+    cohorts, notices: [], ...overrides
+  };
+}
+function setAuditInput(app, id, value) {
+  const input = app.document.getElementById(id); input.value = value; input.dispatchEvent(new app.window.Event('input', { bubbles: true }));
+}
+function submitAudit(app) { app.document.getElementById('audit-form').dispatchEvent(new app.window.Event('submit', { bubbles: true, cancelable: true })); }
+const auditCalls = (app) => app.calls.filter((call) => call.url.pathname === '/api/v1/analytics/audit');
+
+test('audit is lazy and sends exact cents, active filters, and authorization only on explicit submission', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url)) : undefined, 'audit-secret');
+  try {
+    await flush(); assert.equal(auditCalls(app).length, 0);
+    clickMode(app, 'demo'); await flush();
+    const filter = app.document.getElementById('scenario-filter'); filter.value = scenario.id; filter.dispatchEvent(new app.window.Event('change')); await flush();
+    setAuditInput(app, 'audit-budget-increase', '10.05'); setAuditInput(app, 'audit-time-increase', '15');
+    assert.equal(auditCalls(app).length, 0);
+    submitAudit(app); await flush();
+    const call = auditCalls(app)[0];
+    assert.equal(call.url.searchParams.get('budget_delta_cents'), '1005');
+    assert.equal(call.url.searchParams.get('time_delta_minutes'), '15');
+    assert.equal(call.url.searchParams.get('scenario_id'), scenario.id);
+    assert.equal(call.url.searchParams.get('data_mode'), 'demo');
+    assert.equal(call.options.headers.Authorization, 'Bearer audit-secret');
+    assert.ok(!call.url.href.includes('audit-secret'));
+    assert.equal(app.document.getElementById('audit-results').hidden, false);
+    assert.match(app.document.getElementById('audit-cohort-context').textContent, /Demonstration choices/);
+    assert.match(app.document.getElementById('audit-probe-results').textContent, /\+\$10\.05 and \+15 min, applied together/);
+    assert.equal(app.errors.length, 0);
+  } finally { app.close(); }
+});
+
+test('audit displays only one exact cohort with classified, baseline, and dominance denominators', async () => {
+  const other = auditCohort({
+    id: 'cohort-b9876543', scenario_hash: 'snapshot-b9876543', is_demo: true,
+    initial_constraints: { ...constraints, budget_cents: 8000 },
+    wallet_attached: true, wallet_source: 'fixture',
+    financial_context: { profile_name: 'Tight week', source: 'fixture', status: 'ready', spendable_now_cents: 3000 },
+    counts: { initial_choices: 1, selected_plan_fits: 0, other_plan_fits: 0, no_plan_fits: 1, needs_review: 0, newly_feasible_under_probe: 0, modeled_dominated: 0 },
+    denominators: { classified_initial_choices: 1, probe_eligible_initial_choices: 1, baseline_no_feasible_initial_choices: 1, dominance_eligible_initial_choices: 0 }
+  });
+  const app = harness((url) => {
+    if (!url.pathname.endsWith('/audit')) return;
+    const first = auditCohort({ scenario_version: 'a'.repeat(64), world_version: 'b'.repeat(64), counts: { ...auditCohort().counts, newly_feasible_under_probe: 1 } });
+    return response(auditPayload(url, { cohorts: [first, other] }));
+  });
+  try {
+    await flush(); clickMode(app, 'all'); await flush();
+    setAuditInput(app, 'audit-budget-increase', '10'); submitAudit(app); await flush();
+    const select = app.document.getElementById('audit-cohort');
+    assert.equal(select.options.length, 2);
+    assert.match(select.options[0].textContent, /Heights weekday shop.*\$70\.00.*45 min.*No wallet.*cohort-a/);
+    assert.match(select.options[1].textContent, /\$80\.00.*Tight week.*Demo.*cohort-b/);
+    assert.deepEqual([...app.document.querySelectorAll('#audit-classifications dd')].map((node) => node.textContent), ['4 / 8', '2 / 8', '2 / 8', '0 / 8']);
+    assert.deepEqual([...app.document.querySelectorAll('#audit-probe-results strong')].map((node) => node.textContent), ['1 / 2', '2 / 4']);
+    assert.match(app.document.getElementById('audit-method-context').textContent, /not an observed response/);
+    const context = app.document.getElementById('audit-cohort-context');
+    assert.match(context.textContent, /scenario aaaaaaaa · world bbbbbbbb · snapshot/);
+    assert.ok(!context.textContent.includes('a'.repeat(64)));
+    assert.ok(!context.textContent.includes('b'.repeat(64)));
+    assert.ok(context.title.includes('a'.repeat(64)));
+    assert.ok(context.title.includes('b'.repeat(64)));
+    select.value = other.id; select.dispatchEvent(new app.window.Event('change'));
+    assert.deepEqual([...app.document.querySelectorAll('#audit-classifications dd')].map((node) => node.textContent), ['0 / 1', '0 / 1', '1 / 1', '0 / 1']);
+    assert.match(app.document.getElementById('audit-cohort-context').textContent, /snapshot snapshot.*Tight week.*Synthetic fixture.*\$30\.00/);
+    assert.match(app.document.getElementById('audit-probe-results').textContent, /no eligible denominator/);
+    assert.equal(auditCalls(app).length, 1, 'cohort selection uses the loaded report');
+  } finally { app.close(); }
+});
+
+test('audit coverage discloses latest-200 truncation and both skipped-record counts', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url, {
+    total_sessions: 650, selected_sessions: 200, skipped_no_initial_sessions: 190, skipped_invalid_initial_sessions: 2, truncated: true
+  })) : undefined);
+  try {
+    await flush(); submitAudit(app); await flush();
+    const coverage = app.document.getElementById('audit-coverage').textContent;
+    assert.match(coverage, /Truncated to the latest 200/);
+    assert.match(coverage, /Selected 200 of 650 matching sessions; analyzed 8 valid initial choices/);
+    assert.match(coverage, /190 without an initial choice; 2 with an invalid initial record/);
+    assert.match(coverage, /not a random sample.*earliest initial choice/);
+  } finally { app.close(); }
+});
+
+test('audit handles an empty analyzed sample without inventing zero rates', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url, { cohorts: [] })) : undefined);
+  try {
+    await flush(); submitAudit(app); await flush();
+    assert.equal(app.document.getElementById('audit-results').hidden, false);
+    assert.equal(app.document.getElementById('audit-cohort-view').hidden, true);
+    assert.match(app.document.getElementById('audit-status').textContent, /No valid initial choices/);
+    assert.match(app.document.getElementById('audit-coverage').textContent, /Selected 2 of 2.*analyzed 0/);
+    assert.equal(app.document.querySelectorAll('#audit-probe-results strong').length, 0);
+  } finally { app.close(); }
+});
+
+test('uncertain wallet availability stays unknown and labels remain inert text', async () => {
+  const malicious = '<img src=x onerror=alert(1)>';
+  const cohort = auditCohort({
+    scenario_name: malicious, wallet_attached: true, wallet_source: 'fixture',
+    financial_context: { profile_name: malicious, source: 'fixture', status: 'needs_review', spendable_now_cents: null },
+    counts: { initial_choices: 1, selected_plan_fits: 0, other_plan_fits: 0, no_plan_fits: 0, needs_review: 1, newly_feasible_under_probe: 0, modeled_dominated: 0 },
+    denominators: { classified_initial_choices: 1, probe_eligible_initial_choices: 0, baseline_no_feasible_initial_choices: 0, dominance_eligible_initial_choices: 0 },
+    example_ids: { needs_review: ['session-1'] }
+  });
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url, { cohorts: [cohort] })) : undefined);
+  try {
+    await flush(); submitAudit(app); await flush();
+    const context = app.document.getElementById('audit-cohort-context').textContent;
+    assert.ok(context.includes(malicious));
+    assert.match(context, /availability needs review/);
+    assert.doesNotMatch(context, /shopping cash: \$0/);
+    assert.equal(app.document.querySelector('#audit-panel img'), null);
+    assert.deepEqual([...app.document.querySelectorAll('#audit-probe-results strong')].map((node) => node.textContent), ['Not applicable', 'Not applicable']);
+    assert.match(app.document.getElementById('audit-method-context').textContent, /1 needs-review cases are excluded/);
+  } finally { app.close(); }
+});
+
+test('audit examples reuse authenticated session detail and return keyboard focus', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url)) : undefined, 'detail-secret');
+  try {
+    await flush(); submitAudit(app); await flush();
+    app.document.querySelector('.audit-example-disclosure').open = true;
+    const button = app.document.querySelector('#audit-examples [data-session-id="session-1"]');
+    button.focus(); button.click(); await flush();
+    assert.equal(app.document.getElementById('session-dialog').open, true);
+    const call = app.calls.find((item) => item.url.pathname.endsWith('/sessions/session-1'));
+    assert.equal(call.options.headers.Authorization, 'Bearer detail-secret');
+    app.document.getElementById('close-detail').click();
+    assert.equal(app.document.activeElement, button);
+    assert.equal(app.errors.length, 0);
+  } finally { app.close(); }
+});
+
+test('audit input rejects out-of-range and fractional-minute probes without requests', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url)) : undefined);
+  try {
+    await flush();
+    for (const [id, value] of [['audit-budget-increase', '-1'], ['audit-budget-increase', '100.01'], ['audit-budget-increase', '0.001'], ['audit-budget-increase', ''], ['audit-time-increase', '121'], ['audit-time-increase', '0.5']]) {
+      setAuditInput(app, 'audit-budget-increase', '0'); setAuditInput(app, 'audit-time-increase', '0'); setAuditInput(app, id, value);
+      submitAudit(app); await flush();
+      assert.equal(auditCalls(app).length, 0); assert.equal(app.document.getElementById('audit-error').hidden, false);
+    }
+    setAuditInput(app, 'audit-budget-increase', '100'); setAuditInput(app, 'audit-time-increase', '120');
+    submitAudit(app); await flush();
+    assert.equal(auditCalls(app)[0].url.searchParams.get('budget_delta_cents'), '10000');
+    assert.equal(auditCalls(app)[0].url.searchParams.get('time_delta_minutes'), '120');
+  } finally { app.close(); }
+});
+
+test('audit results reset on probe, mode, scenario, token, and refresh changes without automatic audit', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url)) : undefined);
+  try {
+    await flush();
+    const changes = [
+      () => setAuditInput(app, 'audit-budget-increase', '1'),
+      () => clickMode(app, 'demo'),
+      () => { const select = app.document.getElementById('scenario-filter'); select.value = scenario.id; select.dispatchEvent(new app.window.Event('change')); },
+      () => { app.document.getElementById('access-token').value = 'new-token'; app.document.getElementById('access-form').dispatchEvent(new app.window.Event('submit', { cancelable: true })); },
+      () => app.document.getElementById('refresh-button').click(),
+      () => app.document.getElementById('clear-token').click()
+    ];
+    for (const change of changes) {
+      submitAudit(app); await flush(); assert.equal(app.document.getElementById('audit-results').hidden, false);
+      const before = auditCalls(app).length; change(); await flush();
+      assert.equal(app.document.getElementById('audit-results').hidden, true);
+      assert.equal(app.document.getElementById('audit-cohort').options.length, 0);
+      assert.equal(auditCalls(app).length, before);
+    }
+  } finally { app.close(); }
+});
+
+test('late audit responses cannot restore stale results after controls or filters change', async () => {
+  let release, pendingUrl;
+  const app = harness((url) => {
+    if (url.pathname.endsWith('/audit')) { pendingUrl = url; return new Promise((resolve) => { release = resolve; }); }
+  });
+  try {
+    await flush(); submitAudit(app); await flush();
+    assert.equal(app.document.getElementById('audit-panel').getAttribute('aria-busy'), 'true');
+    assert.equal(app.document.getElementById('audit-button').disabled, true);
+    setAuditInput(app, 'audit-time-increase', '15');
+    assert.equal(auditCalls(app)[0].options.signal.aborted, true);
+    release(response(auditPayload(pendingUrl))); await flush();
+    assert.equal(app.document.getElementById('audit-results').hidden, true);
+    assert.match(app.document.getElementById('audit-status').textContent, /Probe changed/);
+    submitAudit(app); await flush(); const oldUrl = pendingUrl;
+    clickMode(app, 'demo'); await flush(); release(response(auditPayload(oldUrl))); await flush();
+    assert.equal(app.document.getElementById('audit-results').hidden, true);
+    assert.equal(app.document.getElementById('audit-panel').getAttribute('aria-busy'), 'false');
+    assert.equal(app.document.getElementById('audit-button').disabled, false);
+  } finally { app.close(); }
+});
+
+test('audit authentication errors are local, retryable, and never replace dashboard results', async () => {
+  let fail = true;
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(fail ? {} : auditPayload(url), fail ? 401 : 200) : undefined);
+  try {
+    await flush(); submitAudit(app); await flush();
+    assert.equal(app.document.getElementById('audit-error').hidden, false);
+    assert.match(app.document.getElementById('audit-error').textContent, /access token/);
+    assert.equal(app.document.getElementById('access-panel').hidden, false);
+    assert.equal(app.document.getElementById('metric-cost').textContent, '$64.00');
+    fail = false; submitAudit(app); await flush();
+    assert.equal(app.document.getElementById('audit-error').hidden, true);
+    assert.equal(app.document.getElementById('audit-results').hidden, false);
+  } finally { app.close(); }
+});
+
+test('audit rejects inconsistent counts instead of presenting fabricated denominators', async () => {
+  const app = harness((url) => {
+    if (!url.pathname.endsWith('/audit')) return;
+    const payload = auditPayload(url); delete payload.cohorts[0].denominators.baseline_no_feasible_initial_choices;
+    return response(payload);
+  });
+  try {
+    await flush(); submitAudit(app); await flush();
+    assert.equal(app.document.getElementById('audit-results').hidden, true);
+    assert.match(app.document.getElementById('audit-error').textContent, /incomplete or inconsistent counts/);
+    assert.equal(app.document.getElementById('audit-button').disabled, false);
+  } finally { app.close(); }
+});
+
+test('audit exposes effective probe limits when application bounds clip an increase', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url, {
+    cohorts: [auditCohort({ probe_clipped_by_app_bounds: true, probe_constraints: { ...constraints, budget_cents: 8000, time_budget_minutes: 60 } })]
+  })) : undefined);
+  try {
+    await flush(); setAuditInput(app, 'audit-budget-increase', '100'); setAuditInput(app, 'audit-time-increase', '120');
+    submitAudit(app); await flush();
+    assert.match(app.document.getElementById('audit-probe-results').textContent, /Effective limits: \$80\.00 · 60 min/);
+    assert.match(app.document.getElementById('audit-probe-results').textContent, /app maximum capped this increase/);
+    assert.match(app.document.getElementById('audit-probe-results').textContent, /Wallet cash stays fixed/);
+  } finally { app.close(); }
+});
+
+test('audit keeps fractional initial time limits precise while probe increments are whole minutes', async () => {
+  const app = harness((url) => url.pathname.endsWith('/audit') ? response(auditPayload(url, {
+    cohorts: [auditCohort({ initial_constraints: { ...constraints, time_budget_minutes: 45.25 }, probe_constraints: { ...constraints, time_budget_minutes: 60.25 } })]
+  })) : undefined);
+  try {
+    await flush(); setAuditInput(app, 'audit-time-increase', '15'); submitAudit(app); await flush();
+    assert.equal(app.document.getElementById('audit-results').hidden, false);
+    assert.match(app.document.getElementById('audit-cohort-context').textContent, /45\.25 min/);
+    assert.match(app.document.getElementById('audit-probe-results').textContent, /60\.25 min/);
+  } finally { app.close(); }
+});

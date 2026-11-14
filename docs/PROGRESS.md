@@ -17,6 +17,7 @@ Updated November 14, 2026. Continuous development remains active until the user 
 - `9c2a81a`: wallet guards across all shopping paths and persistent authenticated investigations.
 - `b897283`: optional wallet selection, cash breakdown and one-trip preview with independent UI review.
 - `cd520e1`: deterministic audit of initial choices within exact financial and scenario cohorts.
+- `def0016`: participant investigation controls, consequential questions and explicit tradeoff application.
 
 ## Working in the apps
 
@@ -35,6 +36,8 @@ Updated November 14, 2026. Continuous development remains active until the user 
 
 ## Verification
 
+**Latest complete check: 284 backend tests, 65 interface tests and 14 Chromium browser tests passed.** Both apps and the API are healthy with preserved demo/participant data. The investigation and audit interfaces have passed mobile visual review; identified copy issues are resolved.
+
 - Original checkpoint: 71 backend/chat/scenario tests, 25 interface tests and 8 real-browser tests passed.
 - Shared-world checkpoint: 96 backend/chat/scenario tests passed; full HTTP demo flow passed after deployment.
 - Wallet/Nessie foundation: 89 tests passed through Docker.
@@ -45,12 +48,11 @@ Updated November 14, 2026. Continuous development remains active until the user 
 - Native desktop browser initialization failed with Windows access denied; actual Chromium testing and screenshots use isolated Playwright Docker.
 - Automated checks create only clearly marked demo sessions, never genuine participant observations. Existing data volumes are preserved.
 
-## Active work
+## Current state and next work
 
-1. Participant investigation controls are verified: 41 participant regressions plus real browser protection, stale-draft, draft/apply/save and money-versus-time flows passed.
-2. Analytics audit interface passed 24 regressions and two browser flows. Final review polish is underway: shorter identifiers and Not applicable for empty denominators.
-3. Run independent UI/UX and browser review as each visible feature becomes usable.
-4. Continue improving the experiment based on verified behavior; commit every milestone.
+The two-app MVP is working and verified: collect an initial choice, inspect financial and geographic context, investigate permissible changes, save a deliberate revision, then analyze exact cohorts and explicit counterfactual probes. The two-minute demonstration path is recorded in DEMO.md.
+
+Continuous development remains active. Next useful extensions are an operator workflow for frozen Nessie captures and a controlled comparison of the same shopping situation across the fixed-world homes. These are not yet implemented interfaces. Changes will remain isolated, verified and committed by milestone.
 
 ## Product direction
 

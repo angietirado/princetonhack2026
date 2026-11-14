@@ -103,6 +103,29 @@
           </section>
         </div>
 
+        <section class="panel audit-panel" id="audit-panel" aria-labelledby="audit-title" aria-busy="false">
+          <div class="panel-heading"><div><p class="eyebrow">Optional model check</p><h2 id="audit-title">Where do limits bind?</h2></div></div>
+          <p class="panel-description">Check initial choices against the same frozen basket, wallet, and limits. Try an analyst-defined increase to see whether a complete basket becomes feasible.</p>
+          <form id="audit-form" class="audit-form" aria-describedby="audit-rules" novalidate>
+            <div class="audit-field"><label for="audit-budget-increase">Budget increase ($)</label><input id="audit-budget-increase" name="budget-increase" type="number" min="0" max="100" step="0.01" value="0" inputmode="decimal" required><span>$0–$100, added to each initial limit</span></div>
+            <div class="audit-field"><label for="audit-time-increase">Time increase (minutes)</label><input id="audit-time-increase" name="time-increase" type="number" min="0" max="120" step="1" value="0" inputmode="numeric" required><span>0–120 whole minutes</span></div>
+            <button class="button button-primary" id="audit-button" type="submit">Audit initial choices</button>
+          </form>
+          <p class="audit-note" id="audit-rules">Both increases apply together. Wallet cash, travel mode, and store limit stay fixed. No saved choices change.</p>
+          <p id="audit-status" class="audit-status" role="status" aria-live="polite">Run when needed. No audit has been loaded.</p>
+          <p id="audit-error" class="message message-error" role="alert" hidden></p>
+          <div id="audit-results" hidden>
+            <p id="audit-coverage" class="audit-coverage"></p>
+            <div id="audit-cohort-view" hidden>
+              <div class="audit-cohort-field"><label for="audit-cohort">Compare one exact cohort</label><select id="audit-cohort" aria-describedby="audit-cohort-context"></select></div>
+              <p class="audit-note" id="audit-cohort-context"></p>
+              <dl id="audit-classifications" class="audit-classifications" aria-label="Modeled feasibility of initial choices"></dl>
+              <div id="audit-probe-results" class="audit-probe-results"></div>
+              <details class="audit-method-disclosure"><summary>How to read this audit</summary><div id="audit-method-context" class="audit-note"></div></details>
+              <details class="audit-example-disclosure"><summary>Inspect example sessions</summary><p class="audit-note">Up to three recent examples per outcome in this cohort. Examples are not a representative sample.</p><div id="audit-examples" class="audit-examples"></div></details>
+            </div>
+          </div>
+        </section>
         <section class="method-note" aria-label="How to interpret these results">
           <span class="method-symbol" aria-hidden="true">i</span><div><h2>Compare like with like.</h2><p id="pair-note">Savings and time changes use each session’s initial and latest revised choices, only when the scenario and constraints match. Descriptive results do not prove that recommendations caused an improvement.</p><ul id="summary-notices"></ul></div>
         </section>
