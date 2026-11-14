@@ -171,7 +171,8 @@ class CostarCatalog:
     def _json_rows(self, relative: str, hashes: dict, counts: dict):
         digest = hashlib.sha256()
         total = count = 0
-        with self._path(relative).open("rb") as stream:
+        # Larger reads avoid small-I/O latency on Docker Desktop bind mounts.
+        with self._path(relative).open("rb", buffering=1024 * 1024) as stream:
             line_number = 0
             while raw := stream.readline(self._max_record_bytes + 1):
                 line_number += 1
