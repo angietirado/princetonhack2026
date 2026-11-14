@@ -20,7 +20,9 @@ from spending_api.merchant import DEMO, Dataset, build_dashboard, csv_export, in
 from spending_api.merchant_compare import attach_comparison, compare_periods, describe_change
 from spending_api.merchant_customers import CustomerNotFound, CustomerRevisionMismatch, customer_detail
 from spending_api.merchant_import import DatasetStore, parse_csv
-from spending_api.merchant_experiments import plan_experiment
+from spending_api.merchant_pilots import (
+    PilotConflict, PilotLimitExceeded, PilotNotFound, PilotStorageError, PilotStore, review_plan,
+)
 
 TEMPLATE = "kind,id,customer_id,order_id,date,amount_cents,status\norder,order_001,customer_001,,2026-11-01,1250,completed\norder,order_002,customer_001,,2026-11-08,1500,completed\nrefund,refund_001,,order_001,2026-11-09,250,\n"
 
@@ -83,6 +85,35 @@ class ExperimentRequest(BaseModel):
     def calendar_date(cls, value):
         return _iso_day(value)
 
+class PilotInputs(ExperimentRequest):
+    # Saving requires the exact normalized assumptions returned by plan review.
+    budget_cents: int | None = Field(strict=True, ge=0, le=5_000_000)
+    start: date
+    end: date
+
+
+class PilotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    expected_dataset_id: str = Field(pattern=r"^(demo|[a-f0-9]{64})$")
+    expected_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reviewed_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    title: str = Field(min_length=1, max_length=120)
+    hypothesis: str = Field(min_length=1, max_length=2000)
+    measure: str = Field(min_length=1, max_length=2000)
+    inputs: PilotInputs
+
+
+class PilotNoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    observed_on: date
+    text: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("observed_on", mode="before")
+    @classmethod
+    def calendar_date(cls, value):
+        return _iso_day(value)
+
+
 class SelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     dataset_id: str = Field(pattern=r"^(demo|[a-f0-9]{64})$")
@@ -128,6 +159,7 @@ def create_app(*, dataset: Dataset = DEMO, token: str | None = None,
     expected_token = os.environ.get("OWNER_API_TOKEN", "") if token is None else token
     directory = data_dir if data_dir is not None else os.environ.get("OWNER_DATA_DIR")
     store = DatasetStore(directory) if directory else None
+    pilots = PilotStore(store) if store is not None else None
     app = FastAPI(title="Regulars merchant insights", version="0.1.0")
     bearer = HTTPBearer(auto_error=False)
     ai_lock = asyncio.Lock()
@@ -166,6 +198,23 @@ def create_app(*, dataset: Dataset = DEMO, token: str | None = None,
             raise HTTPException(503, "CSV imports require configured local dataset storage")
         return store
 
+    def require_pilots():
+        if pilots is None:
+            raise HTTPException(503, "Saving pilots requires configured local dataset storage")
+        return pilots
+
+    def pilot_operation(operation, *args, **kwargs):
+        try:
+            return operation(*args, **kwargs)
+        except PilotNotFound as exc:
+            raise HTTPException(404, str(exc)) from None
+        except (PilotConflict, PilotLimitExceeded) as exc:
+            raise HTTPException(409, str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except (OSError, sqlite3.Error, PilotStorageError):
+            raise HTTPException(503, "Pilot storage is unavailable; refresh saved pilots before retrying") from None
+
     def parse(body):
         try:
             return parse_csv(body.csv, business_name=body.business_name, synthetic=body.synthetic,
@@ -192,7 +241,8 @@ def create_app(*, dataset: Dataset = DEMO, token: str | None = None,
             ai = {**ai, "available": False, "reason": "owner_token_required"}
         return {"ready": True, "synthetic": selected.synthetic, "authentication_required": bool(expected_token),
                 "investigation": "ai" if ai["enabled"] else "deterministic", "ai_enabled": ai["enabled"],
-                "ai": ai, "can_export": True, "can_import": store is not None, "read_only": store is None}
+                "ai": ai, "can_export": True, "can_import": store is not None,
+                "can_save_pilots": pilots is not None, "read_only": store is None}
 
     @app.get("/api/v1/owner/dashboard", dependencies=[Depends(authorize)])
     def dashboard(start: str | None = None, end: str | None = None):
@@ -290,13 +340,42 @@ def create_app(*, dataset: Dataset = DEMO, token: str | None = None,
         body = await _body(request, ExperimentRequest, limit=8192)
         current = await run_in_threadpool(snapshot, body.start, body.end)
         try:
-            result = plan_experiment(current, segment=body.segment, max_customers=body.max_customers,
+            result = review_plan(current, segment=body.segment, max_customers=body.max_customers,
                                      offer_cents=body.offer_cents, window_days=body.window_days,
                                      budget_cents=body.budget_cents)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
-        result["source"] = current["source"]
         return result
+
+    @app.post("/api/v1/owner/pilots", dependencies=[Depends(authorize)])
+    async def save_pilot(request: Request):
+        storage = require_pilots()
+        body = await _body(request, PilotRequest, limit=24_576)
+        return await run_in_threadpool(pilot_operation, storage.save, body.model_dump(mode="json"), snapshot)
+
+    @app.get("/api/v1/owner/pilots", dependencies=[Depends(authorize)])
+    def saved_pilots(
+        limit: Annotated[int, Query(ge=1, le=50)] = 20,
+        offset: Annotated[int, Query(ge=0, le=1000)] = 0,
+        dataset_id: Annotated[str | None, Query(pattern=r"^(demo|[a-f0-9]{64})$")] = None,
+    ):
+        storage = require_pilots()
+        return pilot_operation(storage.list, limit=limit, offset=offset, dataset_id=dataset_id)
+
+    @app.get("/api/v1/owner/pilots/{pilot_id}", dependencies=[Depends(authorize)])
+    def saved_pilot(pilot_id: Annotated[str, APIPath(pattern=r"^[a-f0-9]{64}$")]):
+        return pilot_operation(require_pilots().get, pilot_id)
+
+    @app.post("/api/v1/owner/pilots/{pilot_id}/notes", dependencies=[Depends(authorize)])
+    async def append_pilot_note(
+        request: Request,
+        pilot_id: Annotated[str, APIPath(pattern=r"^[a-f0-9]{64}$")],
+    ):
+        storage = require_pilots()
+        body = await _body(request, PilotNoteRequest, limit=16_384)
+        return await run_in_threadpool(pilot_operation, storage.append_note, pilot_id,
+                                      observed_on=body.observed_on.isoformat(), text=body.text)
+
     @app.post("/api/v1/owner/ask", dependencies=[Depends(authorize)])
     async def ask(request: Request):
         question = await _body(request, OwnerQuestion, limit=8192)

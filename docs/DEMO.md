@@ -16,7 +16,7 @@ Return to Overview and ask exactly "What changed in revenue?" Show the earlier/c
 The default path is deterministic and requires no provider credentials. If AI has separately been configured and verified, identify that provider and show actual tool/delegation activity. Do not describe an offline response as a live model demonstration.
 
 ## 1:15–1:45 — Test a decision
-Open an experiment draft. Set an audience, offer, budget, and evaluation window; click Calculate pilot. Show the offer/holdout split and cost ceiling, then Copy draft to preserve the reviewed assumptions. No customers are assigned or contacted, and no uplift is promised.
+Open an experiment draft. Set an audience, offer, budget, and evaluation window; click Calculate pilot. Show the offer/holdout split and cost ceiling, then Save reviewed draft to preserve the source and assumptions. Open it in Saved drafts; later owner observations remain separate from the original calculation. No customers are assigned or contacted, and no uplift is promised.
 
 ## 1:45–2:00 — Bring your own records
 Open Data source and show preview-before-import, purchase/refund totals, immutable stored datasets, and the synthetic flag. The owner can review the evidence before changing the active dataset.

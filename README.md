@@ -26,7 +26,7 @@ Rebuild with the startup command after changes. Stop using `docker compose --env
 
 1. Inspect net sales, gross average purchase, active customers, and returning-customer share for an explicit UTC period. Within-period repeat buying is shown separately, so short imports do not confuse missing history with lost loyalty.
 2. Explore observed customer segments and cohort retention. Open a customer to inspect the purchase/refund evidence behind their group; [customer evidence](docs/CUSTOMER_EVIDENCE.md) explains the period and history views.
-3. Inspect suggested experiments and their supporting counts. Segment rules describe observed behavior; they are not churn predictions.
+3. Inspect suggested experiments and their supporting counts. Calculate and save a [reviewed pilot](docs/PILOT_RECORDS.md), then revisit its original assumptions and add dated owner observations. Segment rules describe observed behavior; they are not churn predictions.
 4. Ask a focused question and inspect the calculated evidence. The default investigator works without external credentials.
 
 Amounts use integer cents. Refunds and incomplete observation windows remain explicit. Synthetic results are a product demonstration, not claims about a real business. No campaign or customer message is sent.
@@ -46,7 +46,7 @@ Real-browser checks run separately after the app is started:
 docker compose --env-file .env.example --profile tools run --build --no-deps --rm browser-tests
 ```
 
-This checks desktop/mobile layout, filters, questions, exports and reviewed import persistence. It creates a clearly synthetic QA dataset and restores the previously selected dataset. Screenshots and the browser report are written to ignored `.data/browser-artifacts`.
+This checks desktop/mobile layout, customer evidence, questions, exports, reviewed import persistence, and saved pilot records across reloads and source changes. It creates clearly synthetic QA datasets/drafts/observations and restores the previously selected dataset. Repeated runs reuse identical saved records. Screenshots and the browser report are written to ignored `.data/browser-artifacts`.
 
 Optional AI setup and verified sponsor context are documented in [sponsor fit](docs/SPONSOR_FIT.md). Keep `OWNER_AI_ENABLED=false` for credential-free checks. An operator who enables AI must provide `OWNER_API_TOKEN` and the selected provider key through their chosen runtime environment; this app does not read dotenv files itself.
 The optional [Nessie merchant importer](docs/NESSIE_OWNER.md) saves explicitly synthetic sandbox datasets through a separate Docker tool. It is read-only against Nessie and does not silently change the current dataset.

@@ -508,3 +508,103 @@ test('offline revenue change answer matches the same period comparison evidence'
   await page.screenshot({ path: '/artifacts/owner-desktop-revenue-change-answer.png', animations: 'disabled' });
   expect(errors).toEqual([]);
 });
+for (const device of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 375, height: 812 }]) {
+  test(`${device.name} reviewed pilot survives reload and keeps owner observations with its original source`, async ({ page, request }) => {
+    const errors = observe(page);
+    const before = (await (await request.get('/api/v1/owner/datasets')).json()).active_id;
+    const title = `Browser QA synthetic ${device.name} pilot`;
+    const hypothesis = 'Synthetic QA record: test a small welcome-back offer for the selected observed group.';
+    const measure = 'Synthetic QA measurement: review return visits in both assigned groups over the same 14 days.';
+    const observation = `Synthetic QA ${device.name} observation: reviewed the saved assumptions; no real pilot was conducted.`;
+    try {
+      await page.setViewportSize({ width: device.width, height: device.height });
+      await ready(page);
+      await page.locator('[data-view="experiments"]').click();
+      await page.locator('#manual-pilot').click();
+      await page.locator('#draft-name').fill(title);
+      await page.locator('#draft-hypothesis').fill(hypothesis);
+      await page.locator('#draft-measure').fill(measure);
+      await page.locator('#pilot-segment').selectOption('promising');
+      await page.locator('#pilot-audience').fill('20');
+      await page.locator('#pilot-offer').fill('5.00');
+      await page.locator('#pilot-budget').fill('50.00');
+      await page.locator('#pilot-days').fill('14');
+      const planEvent = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/owner/experiments/plan');
+      await page.locator('#pilot-submit').click();
+      const planResponse = await planEvent;
+      expect(planResponse.status()).toBe(200);
+      const plan = await planResponse.json();
+      expect(plan.reviewed_plan_hash).toMatch(/^[a-f0-9]{64}$/);
+      expect(plan.inputs.max_customers).toBe(20);
+      expect(plan.proposed_audience_cap).toBeLessThanOrEqual(20);
+      await expect(page.locator('#save-pilot')).toBeEnabled();
+      const saveEvent = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/owner/pilots' && response.request().method() === 'POST');
+      await page.locator('#save-pilot').click();
+      const saveResponse = await saveEvent;
+      expect(saveResponse.status(), await saveResponse.text()).toBe(200);
+      const saved = await saveResponse.json();
+      expect(saved.status).toBe('saved_draft');
+      expect(saved.source.dataset_id).toBe(plan.dataset_id);
+      expect(saved.source.revision).toBe(plan.source_revision);
+      expect(saved.reviewed_plan_hash).toBe(plan.reviewed_plan_hash);
+      expect(saved.inputs).toEqual(plan.inputs);
+      expect(saved.calculation.maximum_offer_cost_cents).toBe(plan.maximum_offer_cost_cents);
+      expect(saved.title).toBe(title);
+      expect(saved.hypothesis).toBe(hypothesis);
+      expect(saved.measure).toBe(measure);
+
+      // Actual reload, then read the immutable record through the owner UI.
+      await ready(page);
+      await page.locator('[data-view="experiments"]').click();
+      const savedButton = page.locator(`[data-saved-pilot-id="${saved.id}"]`);
+      await expect(savedButton).toBeVisible();
+      await savedButton.click();
+      await expect(page.locator('#saved-pilot-detail')).toBeVisible();
+      await expect(page.locator('#saved-pilot-title')).toHaveText(title);
+      await expect(page.locator('#saved-pilot-detail')).toContainText(hypothesis);
+      await expect(page.locator('#saved-pilot-detail')).toContainText(measure);
+      await expect(page.locator('#saved-pilot-calculation')).toContainText(dollars(plan.maximum_offer_cost_cents));
+      await expect(page.locator('#saved-pilot-source')).toContainText(saved.period.start);
+      await page.locator('#pilot-note-date').fill('2026-11-14');
+      await page.locator('#pilot-note-text').fill(observation);
+      const noteEvent = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/owner/pilots/${saved.id}/notes`);
+      await page.locator('#pilot-note-submit').click();
+      const noteResponse = await noteEvent;
+      expect(noteResponse.status(), await noteResponse.text()).toBe(200);
+      const note = await noteResponse.json();
+      expect(note.pilot_id).toBe(saved.id);
+      expect(note.verification).toBe('owner_reported');
+      await expect(page.locator('#saved-pilot-notes')).toContainText(observation);
+      await noOverflow(page);
+      await page.locator('#saved-pilot-detail').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `/artifacts/owner-${device.name}-saved-pilot.png`, animations: 'disabled' });
+
+      // A different active source must not rewrite or select the saved source.
+      const fixture = { csv: FIXTURE, business_name: 'Browser QA synthetic saved-pilot source', synthetic: true };
+      const previewResponse = await request.post('/api/v1/owner/import/preview', { data: fixture });
+      expect(previewResponse.status()).toBe(200);
+      const preview = await previewResponse.json();
+      const switchedResponse = await request.post('/api/v1/owner/import/commit', { data: { ...fixture, preview_hash: preview.preview_hash } });
+      expect(switchedResponse.status()).toBe(200);
+      const differentId = (await switchedResponse.json()).dataset_id;
+      expect(differentId).not.toBe(saved.source.dataset_id);
+      await ready(page);
+      await page.locator('[data-view="experiments"]').click();
+      await page.locator(`[data-saved-pilot-id="${saved.id}"]`).click();
+      await expect(page.locator('#saved-pilot-title')).toHaveText(title);
+      await expect(page.locator('#saved-pilot-binding')).toContainText(/different|older|another/i);
+      await expect(page.locator('#saved-pilot-notes')).toContainText(observation);
+      const rereadResponse = await request.get(`/api/v1/owner/pilots/${saved.id}`);
+      expect(rereadResponse.status()).toBe(200);
+      const reread = await rereadResponse.json();
+      expect(reread.created_at).toBe(saved.created_at);
+      expect(reread.calculation).toEqual(saved.calculation);
+      expect(reread.notes.filter(item => item.text === observation && item.observed_on === '2026-11-14')).toHaveLength(1);
+      expect((await (await request.get('/api/v1/owner/datasets')).json()).active_id).toBe(differentId);
+      await noOverflow(page);
+      expect(errors).toEqual([]);
+    } finally {
+      await select(request, before);
+    }
+  });
+}

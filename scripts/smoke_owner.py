@@ -20,7 +20,20 @@ def main():
     assert sum(row['net_revenue_cents'] for row in data['trend']) == data['metrics']['net_revenue_cents']
     assert data['metrics']['net_revenue_cents'] == data['metrics']['gross_revenue_cents'] - data['metrics']['refund_cents']
     assert 'no-store' in headers.get('Cache-Control', '')
-    get('/api/v1/owner/status')
+    raw, _ = get('/api/v1/owner/status')
+    capability = json.loads(raw)
+    if capability.get('can_save_pilots'):
+        raw, _ = get('/api/v1/owner/pilots?limit=1')
+        saved = json.loads(raw)
+        assert saved['pagination']['limit'] == 1
+        assert len(saved['pilots']) <= 1
+        if saved['pilots']:
+            raw, _ = get('/api/v1/owner/pilots/' + saved['pilots'][0]['id'])
+            record = json.loads(raw)
+            assert record['id'] == saved['pilots'][0]['id']
+            assert record['status'] == 'saved_draft'
+            assert record['source'] == saved['pilots'][0]['source']
+            assert all(note['verification'] == 'owner_reported' for note in record['notes'])
     person = data['customers'][0]
     query = urlencode({**data['period'], 'expected_revision': data['source']['revision']})
     raw, _ = get('/api/v1/owner/customers/' + quote(person['id'], safe='') + '?' + query)
@@ -37,7 +50,7 @@ def main():
     with urllib.request.urlopen(request, timeout=20) as response:
         answer = json.load(response)
         assert answer['answer'] and answer['evidence']
-    print('Regulars HTTP smoke passed: dashboard, customer evidence, revenue reconciliation, comparison, source labels, CSV, investigation.')
+    print('Regulars HTTP smoke passed: dashboard, customer evidence, revenue reconciliation, comparison, source labels, saved drafts, CSV, investigation.')
 
 
 if __name__ == '__main__':

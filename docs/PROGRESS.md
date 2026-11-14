@@ -12,6 +12,7 @@
 - Per-customer purchase/refund evidence, observed-history versus selected-period totals, and stable source-bound pagination.
 - CSV preview with completed/excluded orders and reconciled purchase/refund totals, explicit reviewed commit, immutable SQLite datasets, safe exports, separate demo selection.
 - Experiment drafts and shared deterministic audience/offer-budget calculator, with no assignments or outreach.
+- Durable reviewed pilot records, immutable source/calculation evidence and append-only owner observations in additive SQLite tables. Exact retries deduplicate, including after source changes.
 - Deterministic revenue-change investigation plus optional bounded Deep Agents investigation with aggregate-only tools.
 - Readable answer evidence cards/tables, expandable calculation details and deduplicated source limitations.
 - Source/revision checks for answers, comparisons, plans, customer history and exports; unapplied date edits cancel obsolete work and remain clearly distinguished from the applied period.
@@ -19,10 +20,11 @@
 
 ## Verified milestones
 - Initial checkpoint `b03c605`: 142 backend, 31 dashboard DOM and six browser scenarios passed.
-- Customer-evidence checkpoint: 197 backend and 45 dashboard DOM tests passed.
-- All ten Chromium scenarios passed across desktop/mobile: dashboard/customer/question/export, drawer controls, reviewed short synthetic import, comparisons, pilot budgeting, future-date controls, customer history reconciliation and keyboard focus, 60-purchase pagination, and offline revenue-change evidence.
-- Live Docker HTTP smoke passed, including customer evidence and reconciled revenue comparisons.
-- Customer drawer mobile and revenue-change desktop screenshots reviewed; no horizontal page overflow or browser page errors.
+- Customer-evidence checkpoint `ae9f147`: 197 backend and 45 dashboard DOM tests passed.
+- Customer-evidence milestone: all ten Chromium scenarios passed across desktop/mobile: dashboard/customer/question/export, drawer controls, reviewed short synthetic import, comparisons, pilot budgeting, future-date controls, customer history reconciliation and keyboard focus, 60-purchase pagination, and offline revenue-change evidence.
+- Durable-pilot milestone: 278 backend tests, 53 dashboard DOM tests and all twelve browser scenarios passed. New desktop/mobile scenarios save a reviewed draft, reload it, add a dated observation, and reopen its original evidence under a different active dataset; exact repeats reuse stored records.
+- Live Docker HTTP smoke passed, including customer evidence, reconciled revenue comparisons and saved-draft reads.
+- Customer drawer, revenue-change and saved-draft screenshots reviewed on desktop/mobile; no horizontal page overflow or browser page errors.
 - Desktop CUA unavailable (GetCursorPos access denied); Docker Playwright provided actual rendered QA.
 
 ## Latest completed corrections
@@ -44,4 +46,4 @@
 Development remains continuous at the user's request until explicitly stopped.
 
 ## Current pass
-Add durable reviewed pilot records and append-only owner observations, preserving the source, exact requested assumptions and server-recomputed calculation. This work is separate from the verified customer-evidence checkpoint; it does not assign customers, send campaigns or infer causal results.
+The durable-pilot workflow is complete and verified. Next: tighten owner-facing group/chart wording to match observed evidence, and continue focused review of practical owner tasks.

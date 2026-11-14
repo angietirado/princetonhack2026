@@ -3,6 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const state = { data: null, token: '', view: 'overview', sequence: 0, controller: null, askSequence: 0, askController: null, draft: null, comparisonSequence: 0, comparisonController: null, pilotSequence: 0, pilotController: null, pilotResult: null };
   const customerState = { id: null, opener: null, sequence: 0, controller: null, busy: false, bound: null, nextOffset: null, total: null, events: [] };
+  const savedState = { canSave: null, items: [], nextOffset: null, total: 0, listSequence: 0, listController: null, listBusy: false, saveSequence: 0, saveController: null, saveBusy: false, detailSequence: 0, detailController: null, current: null, opener: null, noteSequence: 0, noteController: null, noteBusy: false };
   const colors = { champions: '#315b43', regulars: '#78966b', promising: '#b7c89e', slipping: '#bb8059', new: '#ddd9bd' };
   const labels = { champions: 'Champions', regulars: 'Regulars', promising: 'Promising', slipping: 'Slipping away', new: 'New faces' };
   const money = (value) => Number.isFinite(value) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value / 100) : '—';
@@ -17,7 +18,7 @@
   const periodQuery = () => { const query = new URLSearchParams(); if ($('start-date').value) query.set('start', $('start-date').value); if ($('end-date').value) query.set('end', $('end-date').value); return query.toString(); };
   const options = (extra = {}) => ({ cache: 'no-store', redirect: 'error', credentials: 'same-origin', ...extra, headers: { ...authHeaders(), ...(extra.headers || {}) } });
   const resetAnswer = () => { state.askSequence++; state.askController?.abort(); $('ask-result').hidden = true; setText('answer', ''); $('evidence').replaceChildren(); $('answer-limitations').replaceChildren(); $('answer-limits-details').open = false; setText('answer-source', ''); setText('answer-meta', ''); $('answer-activity').replaceChildren(); $('answer-activity-details').hidden = true; $('answer-activity-details').open = false; $('ask-result').classList.remove('incomplete'); setText('ask-status', ''); $('ask-submit').disabled = false; };
-  const clearData = (preserveSnapshot = false) => { resetAnalysis(); if (!preserveSnapshot) { state.data = null; $('dashboard-content').hidden = true; $('period-status').hidden = true; } resetAnswer(); $('draft-card').hidden = true; state.draft = null; $('draft-hypothesis').value = ''; $('draft-measure').value = ''; setText('draft-description', ''); };
+  const clearData = (preserveSnapshot = false) => { resetAnalysis(); if (!preserveSnapshot) { state.data = null; $('dashboard-content').hidden = true; $('period-status').hidden = true; resetSavedRequests(true); } resetAnswer(); $('draft-card').hidden = true; state.draft = null; $('draft-hypothesis').value = ''; $('draft-measure').value = ''; setText('draft-description', ''); };
   const unlockRequired = () => { state.token = ''; $('lock-button').hidden = true; clearData(); $('access-panel').hidden = false; status('This workspace requires an owner access token.'); $('access-token').focus(); };
   const fetchJson = async (url, extra = {}) => { const response = await fetch(url, options(extra)); if (response.status === 401) { const error = new Error('Owner access token required.'); error.auth = true; throw error; } if (!response.ok) { let detail = ''; try { const body = await response.json(); if (typeof body.detail === 'string') detail = body.detail; } catch {} const error = new Error(detail || `Request failed (${response.status}). Please try again.`); error.status = response.status; throw error; } return response.json(); };
 
@@ -31,6 +32,7 @@
     $('page-title').replaceChildren(); title.split('\n').forEach((line, i) => { if (i) $('page-title').append(document.createElement('br')); $('page-title').append(document.createTextNode(line)); });
     document.querySelectorAll('[data-view]').forEach((button) => { const active = button.dataset.view === view; button.classList.toggle('active', active); if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
     ['overview', 'customers', 'experiments'].forEach((name) => { $(`${name}-panel`).hidden = name !== view; });
+    if (view === 'experiments' && state.data) loadSavedPilots();
   }
 
   function renderChart(rows) {
@@ -184,7 +186,7 @@
     $('pilot-segment').value = action.segment;
     $('pilot-audience').value = String(Math.max(1, Math.min(20, action.customers)));
     $('pilot-offer').value = '5.00'; $('pilot-budget').value = '50.00'; $('pilot-days').value = '14';
-    setText('draft-title', action.title); setText('draft-description', action.reason);
+    setText('draft-title', action.title); $('draft-name').value = action.title; setText('draft-description', action.reason);
     $('draft-hypothesis').value = action.suggestion || '';
     $('draft-measure').value = 'Share of assigned customers with a completed return visit within the same evaluation window; compare the offer group with a randomly assigned holdout.';
     setText('draft-status', 'Draft prepared in this tab. Review the idea and choose your own success criteria.');
@@ -247,7 +249,7 @@
     if (start && end && start > end) { status('Choose an end date on or after the start date.', true); return; }
     state.controller?.abort(); const controller = new AbortController(); state.controller = controller; const sequence = ++state.sequence;
     clearData(true); $('access-panel').hidden = true; $('refresh').disabled = true; updatePeriodStatus(true); status('Reading your customer story…');
-    try { const query = periodQuery(); const data = await fetchJson(`/api/v1/owner/dashboard${query ? `?${query}` : ''}`, { signal: controller.signal }); if (sequence !== state.sequence) return; render(data); state.sequence++; resetAnalysis(); resetAnswer(); }
+    try { const query = periodQuery(); const data = await fetchJson(`/api/v1/owner/dashboard${query ? `?${query}` : ''}`, { signal: controller.signal }); if (sequence !== state.sequence) return; render(data); state.sequence++; resetAnalysis(); resetAnswer(); if (state.view === 'experiments') loadSavedPilots(); }
     catch (error) { if (sequence !== state.sequence || error.name === 'AbortError') return; clearData(); if (error.auth) unlockRequired(); else status(error.message || 'Could not load customer data. Please try again.', true); }
     finally { if (state.controller === controller) { state.controller = null; $('refresh').disabled = false; } }
   }
@@ -301,7 +303,7 @@
     host.append(element('h3', '', 'An illustrative customer pilot')); host.append(element('p', 'evidence-period', `${labels[value.segment] || 'Selected customer group'} · ${integer(value.window_days)} evaluation days`));
     evidenceStats(host, [['Offer group', integer(value.treatment_customers), 'Proposed customers'], ['Holdout group', integer(value.holdout_customers), 'Proposed customers'], ['Maximum offer cost', money(value.maximum_offer_cost_cents), `${money(value.offer_cents)} per offer`]]);
     host.append(element('p', `evidence-note${value.within_budget === false || value.feasible_pilot === false ? ' warning' : ''}`, value.within_budget === false ? `This exceeds the entered ${money(value.budget_cents)} offer budget. Revise the assumptions before considering a pilot.` : value.feasible_pilot === false ? 'The observed audience is too small for this illustrative split.' : `${value.budget_cents === null ? 'No offer budget was supplied.' : `Fits the entered ${money(value.budget_cents)} offer budget.`} This does not establish effectiveness or statistical power.`));
-    host.append(element('p', 'evidence-note', 'Draft only: nobody is assigned or contacted. Maximum offer cost excludes delivery, labor, product, and setup costs.'));
+    host.append(element('p', 'evidence-note', 'Calculation only: Regulars does not assign or contact customers. Maximum offer cost excludes delivery, labor, product, and setup costs.'));
   }
   function renderEvidence(item) {
     const card = element('article', 'evidence-item evidence-card'), primary = element('div', 'evidence-primary'); card.append(primary);
@@ -358,8 +360,8 @@
   }
 
   function resetComparison() { state.comparisonSequence++; state.comparisonController?.abort(); $('comparison-result').hidden = true; $('comparison-totals').replaceChildren(); $('comparison-groups').replaceChildren(); $('comparison-contributors').replaceChildren(); $('comparison-limitations').replaceChildren(); $('comparison-contributor-details').open = false; setText('comparison-status', ''); $('compare-button').disabled = false; }
-  function resetPilot() { state.pilotResult = null; state.pilotSequence++; state.pilotController?.abort(); $('pilot-result').hidden = true; $('pilot-numbers').replaceChildren(); $('pilot-limitations').replaceChildren(); setText('pilot-status', ''); $('pilot-submit').disabled = false; }
-  function resetAnalysis() { resetComparison(); resetPilot(); closeCustomerDrawer(false); }
+  function resetPilot() { state.pilotResult = null; resetSaveOperation(); state.pilotSequence++; state.pilotController?.abort(); $('pilot-result').hidden = true; $('pilot-numbers').replaceChildren(); $('pilot-limitations').replaceChildren(); setText('pilot-status', ''); $('pilot-submit').disabled = false; }
+  function resetAnalysis() { resetComparison(); resetPilot(); closeCustomerDrawer(false); resetSavedRequests(); }
   const samePeriod = (a, b) => a?.start === b?.start && a?.end === b?.end;
   const signedMoney = (value) => `${value > 0 ? '+' : ''}${money(value)}`;
   function renderComparison(result) {
@@ -386,24 +388,130 @@
   }
   function decimalCents(value, label, maximum) { if (!/^\d+(?:\.\d{1,2})?$/.test(value.trim())) throw new Error(`${label} must be dollars with at most two decimal places.`); const [whole, fraction = ''] = value.trim().split('.'); const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0')); if (!Number.isSafeInteger(cents) || cents < 0 || cents > maximum) throw new Error(`${label} must be between $0.00 and ${money(maximum)}.`); return cents; }
   function wholeNumber(value, label, minimum, maximum) { if (!/^\d+$/.test(value)) throw new Error(`${label} must be a whole number.`); const number = Number(value); if (!Number.isSafeInteger(number) || number < minimum || number > maximum) throw new Error(`${label} must be between ${minimum} and ${maximum}.`); return number; }
-  function renderPilot(result) {
+  function renderPilot(result, reviewedInputs) {
     if (!result.source_revision || result.source_revision !== state.data.source.revision || !samePeriod(result.period, state.data.period)) throw new Error('The dataset changed while calculating. Refresh the dashboard and calculate again.');
     if (!Number.isSafeInteger(result.maximum_offer_cost_cents) || !Number.isSafeInteger(result.treatment_customers) || !Number.isSafeInteger(result.holdout_customers)) throw new Error('The pilot calculation response is incomplete.');
+    if ((result.dataset_id && result.dataset_id !== state.data.source.dataset_id) || (result.source && (result.source.dataset_id !== state.data.source.dataset_id || result.source.revision !== state.data.source.revision)) || (result.inputs && !samePilotInputs(result.inputs, reviewedInputs))) throw new Error('The reviewed calculation does not match these inputs or this dataset. Calculate again.');
     const small = result.treatment_customers + result.holdout_customers < 4, overBudget = result.within_budget === false;
     const verdict = overBudget ? `Exceeds the offer budget by ${money(result.maximum_offer_cost_cents - result.budget_cents)}. Revise the audience cap, offer, or explicit budget.` : small ? 'Too few observed customers for this illustrative pilot. At least four are needed for the split.' : 'Fits the entered offer budget. Review eligibility, consent, and all other costs before deciding whether to proceed.';
     setText('pilot-verdict', verdict + (overBudget && small ? ' The observed audience is also smaller than four customers.' : '')); $('pilot-verdict').classList.toggle('warning', overBudget || small);
     $('pilot-numbers').replaceChildren(); [[integer(result.treatment_customers), 'Proposed offer group'], [integer(result.holdout_customers), 'Proposed holdout group'], [money(result.maximum_offer_cost_cents), 'Maximum offer cost'], [`${integer(result.window_days)} days`, 'Equal evaluation window']].forEach(([value, label]) => { const card = element('div', 'pilot-number'); card.append(element('strong', '', value), element('span', '', label)); $('pilot-numbers').append(card); });
-    state.pilotResult = { ...result, dataset_id: state.data.source.dataset_id };
+    state.pilotResult = { ...result, dataset_id: state.data.source.dataset_id, ...(result.inputs ? { inputs: { ...result.inputs } } : {}) }; updateSaveAvailability();
     setText('pilot-method', result.method); setText('pilot-measure', result.success_metric); $('pilot-limitations').replaceChildren(); (result.limitations || []).forEach((item) => $('pilot-limitations').append(element('li', '', item))); $('pilot-result').hidden = false;
   }
   async function calculatePilot(event) { event.preventDefault(); if (!state.data || !state.draft) return; resetPilot(); const sequence = state.pilotSequence, dataSequence = state.sequence;
-    try { const body = { segment: $('pilot-segment').value, max_customers: wholeNumber($('pilot-audience').value, 'Audience cap', 1, 1000), offer_cents: decimalCents($('pilot-offer').value, 'Offer', 5000), window_days: wholeNumber($('pilot-days').value, 'Evaluation days', 7, 90), budget_cents: decimalCents($('pilot-budget').value, 'Budget', 5000000), start: state.data.period.start, end: state.data.period.end }; state.pilotController = new AbortController(); $('pilot-submit').disabled = true; setText('pilot-status', 'Calculating the capped audience and maximum offer cost…'); const result = await fetchJson('/api/v1/owner/experiments/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: state.pilotController.signal }); if (sequence !== state.pilotSequence || dataSequence !== state.sequence) return; renderPilot(result); setText('pilot-status', ''); }
+    try { const body = { segment: $('pilot-segment').value, max_customers: wholeNumber($('pilot-audience').value, 'Audience cap', 1, 1000), offer_cents: decimalCents($('pilot-offer').value, 'Offer', 5000), window_days: wholeNumber($('pilot-days').value, 'Evaluation days', 7, 90), budget_cents: decimalCents($('pilot-budget').value, 'Budget', 5000000), start: state.data.period.start, end: state.data.period.end }; state.pilotController = new AbortController(); $('pilot-submit').disabled = true; setText('pilot-status', 'Calculating the capped audience and maximum offer cost…'); const result = await fetchJson('/api/v1/owner/experiments/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: state.pilotController.signal }); if (sequence !== state.pilotSequence || dataSequence !== state.sequence) return; renderPilot(result, body); setText('pilot-status', ''); }
     catch (error) { if (sequence !== state.pilotSequence || dataSequence !== state.sequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('pilot-status', error.message || 'The pilot could not be calculated.'); }
     finally { if (sequence === state.pilotSequence) $('pilot-submit').disabled = false; }
   }
   $('compare-button').addEventListener('click', explainChange); $('pilot-form').addEventListener('submit', calculatePilot);
   ['pilot-segment', 'pilot-audience', 'pilot-offer', 'pilot-budget', 'pilot-days'].forEach((id) => { $(id).addEventListener('input', resetPilot); $(id).addEventListener('change', resetPilot); });
   ['start-date', 'end-date'].forEach((id) => { $(id).addEventListener('input', datesEdited); $(id).addEventListener('change', datesEdited); });
+
+  const pilotInputKeys = ['segment', 'max_customers', 'offer_cents', 'window_days', 'budget_cents', 'start', 'end'];
+  function samePilotInputs(a, b) { return !!a && !!b && pilotInputKeys.every((key) => a[key] === b[key]); }
+  function currentPilotInputs() { return { segment: $('pilot-segment').value, max_customers: wholeNumber($('pilot-audience').value, 'Audience cap', 1, 1000), offer_cents: decimalCents($('pilot-offer').value, 'Offer', 5000), window_days: wholeNumber($('pilot-days').value, 'Evaluation days', 7, 90), budget_cents: decimalCents($('pilot-budget').value, 'Budget', 5000000), start: state.data?.period.start, end: state.data?.period.end }; }
+  function hasReviewedPilot() { const plan = state.pilotResult; return !!(state.data && plan?.inputs && /^[a-f0-9]{64}$/.test(plan.reviewed_plan_hash || '') && plan.dataset_id === state.data.source.dataset_id && plan.source?.dataset_id === state.data.source.dataset_id && plan.source?.revision === state.data.source.revision && plan.source_revision === state.data.source.revision && samePeriod(plan.period, state.data.period)); }
+  function updateSaveAvailability() {
+    const ready = hasReviewedPilot(); $('save-pilot').disabled = savedState.canSave !== true || !ready || savedState.saveBusy;
+    setText('save-pilot-help', savedState.canSave === false ? 'Saving is unavailable in this workspace. You can still copy a draft to keep it yourself.' : !ready ? 'Calculate the pilot before saving a reviewed draft. Recalculate after changing assumptions, dates, source, or view.' : 'Save the displayed calculation and your wording as a draft. Budget and audience warnings remain part of the saved record; nothing is launched.');
+  }
+  function resetSaveOperation() { savedState.saveSequence++; savedState.saveController?.abort(); savedState.saveBusy = false; setText('save-pilot-status', ''); updateSaveAvailability(); }
+  function closeSavedPilot(restoreFocus = true) {
+    const opener = savedState.opener, wasOpen = !$('saved-pilot-detail').hidden;
+    savedState.detailSequence++; savedState.detailController?.abort(); savedState.noteSequence++; savedState.noteController?.abort(); savedState.noteBusy = false; savedState.current = null; savedState.opener = null;
+    $('saved-pilot-detail').hidden = true; $('saved-pilot-content').hidden = true; setText('saved-pilot-title', ''); setText('saved-pilot-status', ''); setText('pilot-note-status', '');
+    ['saved-pilot-hypothesis', 'saved-pilot-measure', 'saved-pilot-source', 'saved-pilot-binding', 'saved-pilot-created'].forEach((id) => setText(id, ''));
+    ['saved-pilot-inputs', 'saved-pilot-calculation', 'saved-pilot-source-details', 'saved-pilot-limits', 'saved-pilot-notes'].forEach((id) => $(id).replaceChildren());
+    $('pilot-note-form').reset(); ['pilot-note-date', 'pilot-note-text', 'pilot-note-submit'].forEach((id) => { $(id).disabled = false; });
+    if (restoreFocus && wasOpen) (opener?.isConnected ? opener : $('refresh-saved-pilots')).focus();
+  }
+  function resetSavedRequests(clearList = false) {
+    savedState.listSequence++; savedState.listController?.abort(); savedState.listBusy = false; $('refresh-saved-pilots').disabled = false; $('saved-pilots-more').disabled = false; closeSavedPilot(false); setText('saved-pilots-status', '');
+    if (clearList) { savedState.canSave = null; savedState.items = []; savedState.nextOffset = null; savedState.total = 0; $('saved-pilots').replaceChildren(); $('saved-pilots-empty').hidden = true; $('saved-pilots-more').hidden = true; setText('saved-pilots-count', ''); updateSaveAvailability(); }
+  }
+  function savedBinding(record) {
+    if (!state.data || record.source.dataset_id !== state.data.source.dataset_id) return { older: true, text: 'Different source from the current workspace. This draft retains its original business, records, and calculation.' };
+    if (record.source.revision !== state.data.source.revision) return { older: true, text: 'An older or different revision of this source. The saved evidence has not been recalculated against the current records.' };
+    if (!samePeriod(record.period, state.data.period)) return { older: true, text: 'A different observation period from the current workspace. This draft keeps the dates and evidence originally reviewed.' };
+    return { older: false, text: 'Matches the current source revision and applied observation period. Saving does not launch a campaign.' };
+  }
+  function savedSourceLine(record) { return `${record.business.name} · ${record.source.label || 'Customer records'} · ${record.source.synthetic ? 'Synthetic/test records' : 'Owner-provided records'} · ${record.period.start} to ${record.period.end} (UTC)`; }
+  function renderSavedList() {
+    $('saved-pilots').replaceChildren();
+    savedState.items.forEach((record) => {
+      const row = element('li', 'saved-pilot-row'), text = element('div'); text.append(element('span', 'small-label', 'SAVED DRAFT · OWNER OBSERVATIONS'), element('h3', '', record.title), element('p', '', savedSourceLine(record)), element('p', '', `Saved ${record.created_at} · ${integer(record.note_count)} owner observation${record.note_count === 1 ? '' : 's'}`));
+      const binding = savedBinding(record); if (binding.older) text.append(element('p', 'saved-warning', binding.text));
+      if (record.calculation?.within_budget === false || record.calculation?.feasible_pilot === false) text.append(element('p', 'saved-warning', record.calculation.within_budget === false ? 'Saved with an over-budget warning. Review before considering any pilot.' : 'Saved with an insufficient-audience warning. This draft is not a feasible illustrative split.'));
+      const open = element('button', 'secondary-button', 'Open saved draft'); open.type = 'button'; open.dataset.savedPilotId = record.id; open.setAttribute('aria-controls', 'saved-pilot-detail'); open.setAttribute('aria-label', `Open saved draft: ${record.title}`); open.addEventListener('click', () => openSavedPilot(record.id, open)); row.append(text, open); $('saved-pilots').append(row);
+    });
+    $('saved-pilots-empty').hidden = savedState.items.length > 0; $('saved-pilots-more').hidden = savedState.nextOffset === null; setText('saved-pilots-count', savedState.total ? `${integer(savedState.items.length)} of ${integer(savedState.total)} saved drafts · all sources` : '');
+  }
+  async function loadSavedPilots(offset = 0) {
+    if (!state.data || state.view !== 'experiments') return;
+    if (document.activeElement === $('saved-pilots-more')) $('saved-pilots-count').focus();
+    savedState.listController?.abort(); const sequence = ++savedState.listSequence; savedState.listController = new AbortController(); const signal = savedState.listController.signal; savedState.listBusy = true; $('refresh-saved-pilots').disabled = true; $('saved-pilots-more').disabled = true; setText('saved-pilots-status', 'Reading saved drafts…');
+    try {
+      if (!offset || savedState.canSave === null) { const capability = await fetchJson('/api/v1/owner/status', { signal }); if (sequence !== savedState.listSequence) return; savedState.canSave = capability.can_save_pilots === true; updateSaveAvailability(); }
+      if (!savedState.canSave) { savedState.items = []; savedState.nextOffset = null; savedState.total = 0; $('saved-pilots').replaceChildren(); $('saved-pilots-empty').hidden = true; $('saved-pilots-more').hidden = true; setText('saved-pilots-count', ''); setText('saved-pilots-status', 'Saved drafts are unavailable because this workspace has no pilot storage. Unsaved drafts can still be calculated and copied.'); return; }
+      const result = await fetchJson(`/api/v1/owner/pilots?limit=20&offset=${offset}`, { signal }); if (sequence !== savedState.listSequence) return;
+      const page = result.pagination; if (!Array.isArray(result.pilots) || !page || page.offset !== offset || page.limit !== 20 || !Number.isSafeInteger(page.total) || page.total < offset + result.pilots.length || result.pilots.some((record) => !record.id || !record.source || !record.business || !record.period) || (page.next_offset !== null && page.next_offset !== offset + result.pilots.length)) throw new Error('The saved draft list is incomplete. Refresh it to try again.');
+      if (offset && (offset !== savedState.items.length || page.total !== savedState.total || result.pilots.some((record) => savedState.items.some((old) => old.id === record.id)))) throw new Error('The saved draft list changed while paging. Refresh it before continuing.');
+      savedState.items = offset ? [...savedState.items, ...result.pilots] : result.pilots; savedState.total = page.total; savedState.nextOffset = page.next_offset; renderSavedList(); setText('saved-pilots-status', '');
+    } catch (error) { if (sequence !== savedState.listSequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('saved-pilots-status', error.message || 'Saved drafts could not be loaded. Refresh to retry.'); }
+    finally { if (sequence === savedState.listSequence) { savedState.listBusy = false; $('refresh-saved-pilots').disabled = false; $('saved-pilots-more').disabled = false; } }
+  }
+  function validateSavedRecord(record, expectedId) {
+    if (!record || !/^[a-f0-9]{64}$/.test(record.id || '') || (expectedId && record.id !== expectedId) || record.status !== 'saved_draft' || !record.business?.name || !record.source?.dataset_id || !record.source?.revision || !record.period || !record.inputs || !record.calculation || !Array.isArray(record.notes) || !['title', 'hypothesis', 'measure'].every((key) => typeof record[key] === 'string')) throw new Error('This saved draft is incomplete. Refresh the list and open it again.');
+    if (!samePeriod(record.period, record.calculation.period) || record.source.revision !== record.calculation.source_revision || record.inputs.start !== record.period.start || record.inputs.end !== record.period.end) throw new Error('The saved calculation does not match its source record. Refresh the list before continuing.');
+    record.notes.forEach((note) => { if (!note.id || note.pilot_id !== record.id || note.verification !== 'owner_reported' || typeof note.text !== 'string' || typeof note.observed_on !== 'string') throw new Error('A saved observation is incomplete. Open the draft again before adding a note.'); });
+  }
+  function renderSavedNotes() {
+    const record = savedState.current; $('saved-pilot-notes').replaceChildren();
+    record.notes.forEach((note) => { const row = element('li'); row.dataset.noteId = note.id; row.append(element('strong', '', `${note.observed_on} · Owner-reported observation`), element('p', '', note.text), element('small', '', `Recorded ${note.created_at} · Not independently verified`)); $('saved-pilot-notes').append(row); }); $('saved-notes-empty').hidden = record.notes.length > 0;
+  }
+  function renderSavedDetail(record) {
+    validateSavedRecord(record); savedState.current = record; setText('saved-pilot-title', record.title); const binding = savedBinding(record); setText('saved-pilot-binding', binding.text); $('saved-pilot-binding').classList.toggle('older', binding.older); setText('saved-pilot-source', savedSourceLine(record)); setText('saved-pilot-created', `Saved ${record.created_at} · Draft record · Regulars has not assigned or contacted customers`); setText('saved-pilot-hypothesis', record.hypothesis); setText('saved-pilot-measure', record.measure);
+    $('saved-pilot-inputs').replaceChildren(); const inputRows = [['Customer group', labels[record.inputs.segment] || record.inputs.segment], ['Audience cap', integer(record.inputs.max_customers)], ['Offer per customer', money(record.inputs.offer_cents)], ['Offer budget', record.inputs.budget_cents === null ? 'Not specified' : money(record.inputs.budget_cents)], ['Evaluation window', `${integer(record.inputs.window_days)} days`]]; inputRows.forEach(([label, value]) => $('saved-pilot-inputs').append(element('dt', '', label), element('dd', '', value)));
+    const calculation = element('div', 'evidence-primary'); evidencePlan(calculation, record.calculation); $('saved-pilot-calculation').replaceChildren(calculation); $('saved-pilot-source-details').replaceChildren(); [['Dataset', record.source.dataset_id], ['Source revision', record.source.revision], ['Observed coverage', `${record.source.coverage_start} to ${record.source.coverage_end}`], ['Saved review', record.reviewed_plan_hash]].forEach(([label, value]) => $('saved-pilot-source-details').append(element('dt', '', label), element('dd', '', value)));
+    $('saved-pilot-limits').replaceChildren(); [...new Set([...(record.source.limitations || []), ...(record.calculation.limitations || [])])].forEach((note) => $('saved-pilot-limits').append(element('li', '', note))); renderSavedNotes(); $('saved-pilot-content').hidden = false; $('saved-pilot-detail').hidden = false; setText('saved-pilot-status', ''); $('pilot-note-submit').disabled = savedState.canSave !== true;
+  }
+  async function openSavedPilot(id, opener) {
+    closeSavedPilot(false); savedState.opener = opener; const sequence = savedState.detailSequence; savedState.detailController = new AbortController(); $('saved-pilot-detail').hidden = false; setText('saved-pilot-title', 'Opening saved draft…'); setText('saved-pilot-status', 'Reading the original source and calculation.'); $('saved-pilot-title').focus();
+    try { const record = await fetchJson(`/api/v1/owner/pilots/${encodeURIComponent(id)}`, { signal: savedState.detailController.signal }); if (sequence !== savedState.detailSequence) return; validateSavedRecord(record, id); renderSavedDetail(record); }
+    catch (error) { if (sequence !== savedState.detailSequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else { setText('saved-pilot-title', 'Saved draft unavailable'); setText('saved-pilot-status', error.message || 'Could not open this saved draft. Refresh the list and try again.'); } }
+  }
+  function boundedDraftText(id, label, maximum) { const value = $(id).value.trim(); if (!value || value.length > maximum) { $(id).focus(); throw new Error(`${label} must contain 1 to ${maximum} characters.`); } return value; }
+  async function saveReviewedPilot() {
+    if (savedState.saveBusy || savedState.canSave !== true) return;
+    if (!hasReviewedPilot()) { updateSaveAvailability(); setText('save-pilot-status', 'Calculate and review the current pilot before saving.'); return; }
+    const sequence = savedState.saveSequence, dataSequence = state.sequence, pilot = state.pilotResult;
+    try {
+      if (!samePilotInputs(pilot.inputs, currentPilotInputs())) { resetPilot(); setText('save-pilot-status', 'The assumptions changed. Calculate again before saving this draft.'); return; }
+      const body = { expected_dataset_id: pilot.dataset_id, expected_revision: pilot.source_revision, reviewed_plan_hash: pilot.reviewed_plan_hash, title: boundedDraftText('draft-name', 'Draft title', 120), hypothesis: boundedDraftText('draft-hypothesis', 'What you will try', 2000), measure: boundedDraftText('draft-measure', 'How you will measure it', 2000), inputs: { ...pilot.inputs } };
+      savedState.saveBusy = true; savedState.saveController = new AbortController(); updateSaveAvailability(); setText('save-pilot-status', 'Saving the reviewed draft and its original evidence…');
+      const record = await fetchJson('/api/v1/owner/pilots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: savedState.saveController.signal });
+      if (sequence !== savedState.saveSequence || dataSequence !== state.sequence) return;
+      validateSavedRecord(record); if (record.source.dataset_id !== body.expected_dataset_id || record.source.revision !== body.expected_revision || record.reviewed_plan_hash !== body.reviewed_plan_hash || !samePilotInputs(record.inputs, body.inputs) || ['title', 'hypothesis', 'measure'].some((key) => record[key] !== body[key])) throw new Error('The saved response did not match the reviewed draft. Refresh saved drafts to inspect the stored record.');
+      closeSavedPilot(false); savedState.opener = $('save-pilot'); renderSavedDetail(record); $('saved-pilot-title').focus(); setText('save-pilot-status', 'Saved as a draft with its original evidence. Regulars has not assigned or contacted customers. Saving does not launch a campaign.'); loadSavedPilots();
+    } catch (error) { if (sequence !== savedState.saveSequence || dataSequence !== state.sequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('save-pilot-status', `${error.message || 'Save could not be confirmed.'}${savedState.saveBusy ? ' Refresh saved drafts before retrying if the connection was interrupted; identical reviewed content returns the same record.' : ''}`); }
+    finally { if (sequence === savedState.saveSequence) { savedState.saveBusy = false; updateSaveAvailability(); } }
+  }
+  async function addPilotNote(event) {
+    event.preventDefault(); if (!savedState.current || savedState.noteBusy || savedState.canSave !== true) return;
+    const record = savedState.current, detailSequence = savedState.detailSequence, sequence = ++savedState.noteSequence;
+    try {
+      const observed_on = $('pilot-note-date').value, text = boundedDraftText('pilot-note-text', 'Observation', 2000); if (!/^\d{4}-\d{2}-\d{2}$/.test(observed_on) || !Number.isFinite(Date.parse(`${observed_on}T00:00:00Z`)) || new Date(`${observed_on}T00:00:00Z`).toISOString().slice(0, 10) !== observed_on) throw new Error('Choose a valid date for your observation.');
+      savedState.noteBusy = true; savedState.noteController = new AbortController(); ['pilot-note-date', 'pilot-note-text', 'pilot-note-submit'].forEach((id) => { $(id).disabled = true; }); setText('pilot-note-status', 'Saving your dated observation…');
+      const note = await fetchJson(`/api/v1/owner/pilots/${encodeURIComponent(record.id)}/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ observed_on, text }), signal: savedState.noteController.signal });
+      if (sequence !== savedState.noteSequence || detailSequence !== savedState.detailSequence) return;
+      if (!note.id || note.pilot_id !== record.id || note.verification !== 'owner_reported' || note.observed_on !== observed_on || note.text !== text) throw new Error('The saved observation did not match your note. Open the draft again to verify it.');
+      if (!record.notes.some((existing) => existing.id === note.id)) record.notes.push(note); renderSavedNotes(); $('pilot-note-text').value = ''; const listed = savedState.items.find((item) => item.id === record.id); if (listed) listed.note_count = record.notes.length; renderSavedList(); setText('pilot-note-status', 'Owner observation saved. It is not verified evidence of assignment or uplift and was not sent to AI.'); $('pilot-note-text').disabled = false; $('pilot-note-text').focus();
+    } catch (error) { if (sequence !== savedState.noteSequence || detailSequence !== savedState.detailSequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('pilot-note-status', `${error.message || 'The observation could not be saved.'}${savedState.noteBusy ? ' Open the saved draft again before retrying if the connection was interrupted.' : ''}`); }
+    finally { if (sequence === savedState.noteSequence) { savedState.noteBusy = false; ['pilot-note-date', 'pilot-note-text', 'pilot-note-submit'].forEach((id) => { $(id).disabled = false; }); } }
+  }
+  $('save-pilot').addEventListener('click', saveReviewedPilot); $('refresh-saved-pilots').addEventListener('click', () => loadSavedPilots()); $('saved-pilots-more').addEventListener('click', () => { if (savedState.nextOffset !== null) loadSavedPilots(savedState.nextOffset); }); $('close-saved-pilot').addEventListener('click', () => closeSavedPilot()); $('pilot-note-form').addEventListener('submit', addPilotNote);
+  ['draft-name', 'draft-hypothesis', 'draft-measure'].forEach((id) => $(id).addEventListener('input', resetSaveOperation));
 
   const importState = { sequence: 0, preview: null, reviewed: null, busy: false, canImport: false };
   const importStatus = (message) => setText('data-source-status', message);
@@ -412,7 +520,7 @@
   function closeDataDrawer() { if (importState.busy) return; $('data-drawer').hidden = true; $('data-drawer-backdrop').hidden = true; $('main').removeAttribute('inert'); document.querySelector('.sidebar').removeAttribute('inert'); $('data-source-button').focus(); }
   async function refreshDatasets() { const result = await fetchJson('/api/v1/owner/datasets'); $('dataset-select').replaceChildren(); result.datasets.forEach((dataset) => { const option = element('option', '', `${dataset.business_name} · ${dataset.synthetic ? 'Synthetic demo' : 'Imported data'}`); option.value = dataset.id; $('dataset-select').append(option); }); $('dataset-select').value = result.active_id; }
   async function openDataDrawer() {
-    closeCustomerDrawer(false);
+    resetAnalysis(); resetAnswer();
     $('data-drawer').hidden = false; $('data-drawer-backdrop').hidden = false; $('main').setAttribute('inert', ''); document.querySelector('.sidebar').setAttribute('inert', ''); $('close-data-drawer').focus(); importStatus('Checking available datasets…');
     try { const capability = await fetchJson('/api/v1/owner/status'); importState.canImport = capability.can_import === true; setImportBusy(false); await refreshDatasets(); if (!$('data-drawer').hidden) importStatus(importState.canImport ? '' : 'This workspace is read-only. Dataset import and switching are unavailable.'); }
     catch (error) { if (error.auth) { closeDataDrawer(); unlockRequired(); } else importStatus(error.message || 'Could not load datasets.'); }
@@ -472,7 +580,7 @@
   }
   $('copy-draft').addEventListener('click', async () => {
     if (!state.draft) return;
-    const text = `${state.draft.title}\n\nObservation: ${state.draft.reason}\n\nExperiment: ${$('draft-hypothesis').value}\n\nMeasurement: ${$('draft-measure').value}\n\n${pilotCopyText()}\n\nDraft only. No customer has been assigned or contacted, and no campaign has been launched.`;
+    const text = `${$('draft-name').value || state.draft.title}\n\nObservation: ${state.draft.reason}\n\nExperiment: ${$('draft-hypothesis').value}\n\nMeasurement: ${$('draft-measure').value}\n\n${pilotCopyText()}\n\nDraft only. No customer has been assigned or contacted, and no campaign has been launched.`;
     try { await navigator.clipboard.writeText(text); setText('draft-status', 'Draft copied with its current calculation state. Nothing has been sent to customers.'); }
     catch { setText('draft-status', 'Copy is unavailable in this browser. Select the draft text above to copy it manually.'); }
   });
