@@ -10,7 +10,7 @@ def test_public_file_pins_customer_and_overrides_old_env_options(tmp_path, monke
     options = tmp_path / "settings.toml"
     options.write_text('data_source = "nessie"\nnessie_customer_id = "cus_pinned"\n')
     credentials = tmp_path / ".env"
-    credentials.write_text('NESSIE_API_KEY=fake-key\nAPP_API_TOKEN=test-app-token\n')
+    credentials.write_text("NESSIE_API_KEY=fake-key\nAPP_API_TOKEN=test-app-token\n")
     monkeypatch.setenv("NESSIE_CUSTOMER_ID", "cus_old")
     monkeypatch.setenv("DATA_SOURCE", "fixture")
     monkeypatch.delenv("NESSIE_API_KEY", raising=False)
@@ -56,3 +56,50 @@ def test_photon_remains_disabled_even_with_credentials(tmp_path):
     with TestClient(create_app(settings)) as client:
         assert client.post("/webhooks/photon", json={}).status_code == 503
     assert not settings.photon_inbox_path.exists()
+
+
+@pytest.mark.parametrize(
+    "provider,key_name", [("gemini", "gemini_api_key"), ("nemotron", "nvidia_api_key")]
+)
+def test_ai_requires_selected_provider_key_and_app_token(provider, key_name):
+    base = dict(
+        _env_file=None,
+        data_source="fixture",
+        llm_enabled=True,
+        llm_provider=provider,
+        gemini_api_key="",
+        nvidia_api_key="",
+        app_api_token="",
+    )
+    with pytest.raises(ValidationError, match="Enabled AI"):
+        Settings(**base)
+    base[key_name] = "secret-must-not-be-echoed"
+    with pytest.raises(ValidationError) as error:
+        Settings(**base)
+    assert "secret-must-not-be-echoed" not in str(error.value)
+    base["app_api_token"] = "fake-app-token"
+    assert Settings(**base).llm_provider == provider
+
+
+@pytest.mark.parametrize("name", ["gemini_api_key", "nvidia_api_key", "matterport_api_token"])
+def test_public_ai_settings_reject_credentials(tmp_path, name):
+    options = tmp_path / "settings.toml"
+    options.write_text(f'{name} = "never-echo-this"\n')
+    with pytest.raises(ValidationError) as error:
+        load_settings(options, env_file=None)
+    assert "never-echo-this" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("llm_max_model_turns", 100),
+        ("llm_max_tool_calls", 0),
+        ("llm_timeout_seconds", 1000),
+        ("llm_max_output_tokens", 999999),
+        ("llm_provider", "unconfigured-provider"),
+    ],
+)
+def test_ai_settings_bound_work(field, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, data_source="fixture", llm_enabled=False, **{field: value})

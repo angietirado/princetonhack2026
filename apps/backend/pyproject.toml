@@ -9,6 +9,9 @@ dependencies = [
   "httpx>=0.28,<1",
   "pydantic-settings>=2.8,<3",
   "standardwebhooks>=1,<2",
+  "langchain>=1.5,<2",
+  "langchain-google-genai>=4.5,<5",
+  "langchain-nvidia-ai-endpoints>=1.5,<2",
 ]
 
 [build-system]

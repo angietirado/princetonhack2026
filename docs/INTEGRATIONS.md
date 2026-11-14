@@ -6,7 +6,7 @@ Keep credentials in the root `.env` and public options in `settings.toml`. The b
 
 `.env.example` sets `APP_SETTINGS_FILE=./settings.example.toml` for offline checks. Omit that selector from your private `.env` to use `settings.toml`. Native commands also accept `APP_SETTINGS_FILE` in the process environment; they default to `settings.toml`.
 
-After editing settings, run `docker compose up --build --detach --wait` to recreate affected services. Validate shared configuration with `docker compose --env-file .env.example config --quiet`; this uses the public template instead of your private `.env`. No LLM credential is wired in until the team selects a provider and implements the agent worker.
+After editing settings, run `docker compose --env-file .env up --build --detach --wait` to recreate affected services. Validate shared configuration with `docker compose --env-file .env.example config --quiet`; this uses the public template instead of your private `.env`. Gemini and NVIDIA credentials are passed only to the backend when the optional AI assistant is enabled.
 
 ## Nessie v2
 
@@ -59,6 +59,37 @@ No phone numbers were provisioned and no real messages were sent as part of the 
 
 ## AI agents
 
-Select a model/runtime in the design decision log before adding an SDK or provider credentials. Wrap `SpendingTools` methods as structured tools using their typed inputs and outputs, with the customer's snapshot supplied by server context. Add a bounded worker loop and persist conversation state alongside the inbox/outbox.
+The selected framework is LangChain with `langchain-google-genai` for Gemini and `langchain-nvidia-ai-endpoints` for hosted NVIDIA Nemotron. Packages and transitive dependencies are locked in `uv.lock`. There is no automatic fallback between providers.
 
-The current scaffold contains calculations and transport boundaries, not a simulated AI conversation. The browser and webhook tests run without any LLM API key.
+| Environment field | Setup |
+| --- | --- |
+| `GEMINI_API_KEY` | In [Google AI Studio](https://aistudio.google.com/api-keys), sign in and create an API key for your project. Use the Gemini Developer API key; this integration explicitly disables Vertex AI. [Google guide](https://ai.google.dev/gemini-api/docs/api-key). |
+| `NVIDIA_API_KEY` | Sign in at [NVIDIA Build](https://build.nvidia.com/), open the Nemotron model page, and choose Get API Key. [NVIDIA guide](https://docs.api.nvidia.com/nim/docs/api-quickstart). |
+| `APP_API_TOKEN` | Reuse your existing app bearer token or generate a new random secret locally. It is required for enabled AI, including fixture mode, and is not a vendor key. |
+| `APP_SETTINGS_FILE` | Set `./settings.ai.toml` to select the AI fixture configuration. This is a file selector, not a secret. |
+
+Keep a single active definition of each field in `.env`. If the agent appended commented placeholders to your existing file, uncomment only missing fields and fill them yourself. Never put keys in frontend variables, prompts, tracked files, or shared command output. No key is needed for credential-free verification.
+
+The initial models are `gemini-3.8-flash` and `nvidia/nemotron-3-super-120b-a12b`. These identifiers were checked against official provider documentation; account access, quota, cost, and live tool calling still require a credentialed smoke test. Set the model names in TOML if your account uses another supported model. Only the selected provider key is required. Do not enable billing or buy access solely to run offline tests.
+
+From the repository root, start the isolated Compose project:
+
+```sh
+docker compose --env-file .env -p princeton-langchain-20261114 up --build --detach --wait
+```
+
+The usual host ports 5173 and 8765 must be free; the project name creates separate containers and a separate data volume. This command does not stop an already running project. The generated fixture is preserved across restarts within the new project.
+
+At `http://127.0.0.1:8765/docs`, authorize with the app token, inspect `GET /api/v1/agent/status`, then invoke `POST /api/v1/agent/answer` with a JSON `question`. The backend authenticates before reading a question or loading data. Clients cannot override provider, customer, source path, credentials, or system prompt. One AI request runs per worker at a time; simultaneous requests receive 429 rather than entering an unbounded queue.
+
+The sequential LangChain loop offers structured spending-summary, transaction, and recurring-candidate tools. Default limits are 4 model turns, 6 tool calls, 45 seconds, and 1024 output tokens per model call. Tools use integer cents and return bounded evidence. Oversized or malformed tool requests fail closed. Ambient LangSmith tracing is disabled for the request. No tool transfers money, cancels services, sends messages, or executes code.
+
+Every response includes provider/model labels, a snapshot hash, evidence, and coverage caveats. A successful model response is not proof that its prose is correct: structured evidence remains authoritative. No conversation memory is persisted. A failed or limited run is labeled explicitly. The API is not yet connected to the dashboard or Photon worker.
+
+## CoStar spatial credentials
+
+The supplied local CoStar catalog requires no API key. Its Matterport model references are metadata, not evidence that an interior was inspected, and recorded availability is not live availability.
+
+For later live Matterport access, [Matterport API setup](https://developers.matterport.com/api/) uses **Settings > Developer Tools > API Token Management**. Map the Token ID to `MATTERPORT_API_KEY` and the Token Secret to `MATTERPORT_API_TOKEN`. The separate `MATTERPORT_SDK_KEY` is for an interactive browser SDK; an API token does not replace it. A personal key may not grant access to sponsor-owned models; use the event's provided access instructions.
+
+`VEXCEL_API_KEY` is reserved for later aerial imagery integration. Do not invent a key or assume a personal account can access the event dataset. Consult the CoStar track's pinned Quick Start and organizers for sponsored Matterport/Vexcel credentials. These spatial credential fields are not used by the local catalog implementation. Photon remains deferred and its credentials are not needed for this milestone.

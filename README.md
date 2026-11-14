@@ -88,7 +88,21 @@ docker compose --env-file .env.example exec -T backend python -m spending_api.te
 docker compose --env-file .env.example exec -T backend python -m spending_api.terminal transactions --limit 10
 ```
 
-`exec` uses the running backend's mounted settings and runtime credentials; its `--env-file .env.example` does not switch that container to fixture mode. The commands use the pinned customer, return integer-cent amounts, and make no financial writes. Add `--start YYYY-MM-DD --end YYYY-MM-DD` to limit the transaction period. These are deterministic analysis commands; natural-language AI chat remains a later milestone.
+`exec` uses the running backend's mounted settings and runtime credentials; its `--env-file .env.example` does not switch that container to fixture mode. The commands use the pinned customer, return integer-cent amounts, and make no financial writes. Add `--start YYYY-MM-DD --end YYYY-MM-DD` to limit the transaction period. Natural-language questions use the separate opt-in API below.
+
+## LangChain assistant
+
+The backend supports Gemini and NVIDIA Nemotron through LangChain. It exposes only read-only spending tools, with server-bound customer data, bounded model/tool calls, and evidence alongside each answer. AI is disabled in the default offline settings.
+
+In your ignored `.env`, set `GEMINI_API_KEY` or `NVIDIA_API_KEY`, retain or create `APP_API_TOKEN`, and set `APP_SETTINGS_FILE=./settings.ai.toml`. Select `llm_provider = "gemini"` or `"nemotron"` in `settings.ai.toml`. This file uses generated fixture data so the first AI run needs no Nessie credential. See [key setup and limitations](docs/INTEGRATIONS.md#ai-agents).
+
+```sh
+docker compose --env-file .env -p princeton-langchain-20261114 up --build --detach --wait
+```
+
+Open **http://127.0.0.1:8765/docs**, choose **Authorize**, enter `APP_API_TOKEN`, and try `POST /api/v1/agent/answer` with `{"question":"Summarize spending from 2026-11-01 through 2026-11-13."}`. `GET /api/v1/agent/status` reports the selected provider without exposing keys. Each question starts a new context; include dates and filters in follow-up requests. The dashboard does not yet display AI chat.
+
+The answer's `status` must be `answered` before treating its prose as a completed response. `limited` or `unavailable` responses explain the failure and can include partial tool evidence. Evidence is calculated from observed records; model prose is an interpretation, and missing history is not proof of zero spending. Recurring results remain candidates.
 
 ## What runs today
 
@@ -98,7 +112,7 @@ docker compose --env-file .env.example exec -T backend python -m spending_api.te
 - The connected Ledgerly dashboard: cash/card balances, expense-category and monthly charts, date filters, searchable transactions, recurring candidates, and CSV exports.
 - Photon 2.0 signature verification, sender filtering, a durable SQLite inbox, and an explicit outbound transport function.
 
-AI orchestration and the inbox worker that sends replies are **not implemented yet**. Photon is disabled in the MVP settings; enabling its receiver later only queues events. The pinned Nessie customer comes from a completed 300-transaction historical simulation. Credentials are not committed.
+Opt-in LangChain AI orchestration is implemented for the question API. The inbox worker that sends phone replies is **not implemented yet**. Photon is disabled in the MVP settings; enabling its receiver later only queues events. The pinned Nessie customer comes from a completed 300-transaction historical simulation. Credentials are not committed.
 
 ## Checks with Docker
 
@@ -123,7 +137,7 @@ The root `index.html`, `app.js`, and `styles.css` contain the connected Ledgerly
 
 The app token is kept only in page memory, sent in an Authorization header to the same-origin backend, and cleared on lock or reload. Provider keys never reach the browser. The customer stays fixed by `settings.toml`; there is no fake workspace switcher or bank-linking flow. Errors hide old figures instead of substituting sample data.
 
-All amounts are calculated in cents. The category donut shows completed expenses before refunds; monthly bars and reports show net spending after refunds. Current cash balances exclude credit card debt. UTC date filters affect transactions, not current balances. CSV exports preserve the selected period; transaction exports include all matching rows across pages. Recurring charges are labeled candidates. Tax deductions and AI answers are not inferred or fabricated.
+All amounts are calculated in cents. The category donut shows completed expenses before refunds; monthly bars and reports show net spending after refunds. Current cash balances exclude credit card debt. UTC date filters affect transactions, not current balances. CSV exports preserve the selected period; transaction exports include all matching rows across pages. Recurring charges are labeled candidates. The dashboard does not infer tax deductions or display AI answers.
 
 Docker is sufficient for running and checking the dashboard. [Optional native development](docs/LOCAL_DEVELOPMENT.md) is available for working on the Python and React scaffolds without containers.
 

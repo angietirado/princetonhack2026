@@ -1,3 +1,5 @@
+import asyncio
+import json
 import secrets
 import sqlite3
 from datetime import date
@@ -7,11 +9,13 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from standardwebhooks.webhooks import Webhook, WebhookVerificationError
 
 from spending_api.agent_tools import SpendingTools
 from spending_api.config import Settings, load_settings
 from spending_api.dashboard import build_dashboard
+from spending_api.llm import AgentAnswer, answer_spending
 from spending_api.models import (
     Account,
     DashboardData,
@@ -24,26 +28,69 @@ from spending_api.nessie import DataSourceError, load_snapshot
 from spending_api.photon import enqueue_event, parse_incoming
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+class AgentQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    question: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("question")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Question cannot be blank")
+        return value
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON field")
+        result[key] = value
+    return result
+
+
+async def _bounded_json(request: Request) -> dict:
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        raise HTTPException(415, "Use application/json")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 8192:
+            raise HTTPException(413, "Request exceeds the demo size limit")
+    try:
+        body = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
+        if not isinstance(body, dict):
+            raise ValueError("Expected object")
+        return body
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "Invalid JSON request") from None
+
+
+def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="Spending Companion API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type"],
     )
     bearer = HTTPBearer(auto_error=False)
+    # A single request per worker prevents an unbounded queue of paid model work.
+    agent_lock = asyncio.Lock()
 
     def authorize(
+        request: Request,
         credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     ) -> None:
         expected = settings.app_api_token.get_secret_value()
         if expected and (
-            not credentials
+            len(request.headers.getlist("authorization")) != 1
+            or not credentials
             or not secrets.compare_digest(
-                credentials.credentials,
-                expected,
+                credentials.credentials.encode("utf-8"),
+                expected.encode("utf-8"),
             )
         ):
             raise HTTPException(401, "Valid app bearer token required")
@@ -64,6 +111,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health")
     def health():
         return {"status": "ok", "data_source": settings.data_source}
+
+    @app.get("/api/v1/agent/status", dependencies=[Depends(authorize)])
+    def agent_status(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return {
+            "enabled": settings.llm_enabled,
+            "provider": settings.llm_provider,
+            "model": settings.gemini_model
+            if settings.llm_provider == "gemini"
+            else settings.nemotron_model,
+            "read_only": True,
+            "max_model_turns": settings.llm_max_model_turns,
+            "max_tool_calls": settings.llm_max_tool_calls,
+            "timeout_seconds": settings.llm_timeout_seconds,
+        }
+
+    @app.post(
+        "/api/v1/agent/answer",
+        response_model=AgentAnswer,
+        dependencies=[Depends(authorize)],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": AgentQuestion.model_json_schema()}},
+            }
+        },
+    )
+    async def agent_answer(request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        if not settings.llm_enabled:
+            raise HTTPException(503, "AI is disabled; enable it in the public settings file")
+        try:
+            question = AgentQuestion.model_validate(await _bounded_json(request))
+        except ValidationError:
+            raise HTTPException(422, "Provide only a question of 1 to 2000 characters") from None
+        if agent_lock.locked():
+            raise HTTPException(429, "An AI request is already running; retry shortly")
+        async with agent_lock:
+            try:
+                async with asyncio.timeout(settings.llm_timeout_seconds):
+                    tools = await scoped_tools(None)
+                    return await answer_spending(
+                        tools, question.question, settings, model=agent_model
+                    )
+            except TimeoutError:
+                raise HTTPException(504, "AI request deadline exceeded") from None
+            except (OSError, ValueError, KeyError, TypeError):
+                raise HTTPException(
+                    503, "Customer data cannot support a grounded AI answer"
+                ) from None
 
     @app.get("/api/v1/accounts", response_model=list[Account])
     async def accounts(tools: Annotated[SpendingTools, Depends(scoped_tools)]):
