@@ -188,6 +188,16 @@ def test_body_and_media_limits(tmp_path):
         assert oversized.status_code == 413
 
 
+def test_question_rejects_query_parameter_scope_overrides(tmp_path):
+    with TestClient(create_app(configured(tmp_path))) as client:
+        response = client.post(
+            "/api/v1/agent/answer?customer_id=other",
+            headers=HEADERS,
+            json={"question": "Summarize"},
+        )
+        assert response.status_code == 422
+
+
 def test_disabled_status_does_not_initialize_model_or_read_fixture(tmp_path):
     settings = Settings(
         _env_file=None,

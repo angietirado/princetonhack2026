@@ -70,7 +70,7 @@ The selected framework is LangChain with `langchain-google-genai` for Gemini and
 
 Keep a single active definition of each field in `.env`. If the agent appended commented placeholders to your existing file, uncomment only missing fields and fill them yourself. Never put keys in frontend variables, prompts, tracked files, or shared command output. No key is needed for credential-free verification.
 
-The initial models are `gemini-3.8-flash` and `nvidia/nemotron-3-super-120b-a12b`. These identifiers were checked against official provider documentation; account access, quota, cost, and live tool calling still require a credentialed smoke test. Set the model names in TOML if your account uses another supported model. Only the selected provider key is required. Do not enable billing or buy access solely to run offline tests.
+The default models are `gemini-3.8-flash` and `nvidia/nemotron-3.5-lightning-30b-a3b`. Both passed an explicitly authorized live synthetic tool round trip on November 14, 2026. The older Nemotron 3 Super hosted endpoint returned 404 and its [NVIDIA model page](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/build) labels it deprecated; merely appearing in the model catalog is not proof of endpoint availability. The [Lightning model page](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/build) advertises hosted access and function calling. Account access and quota can still change. Set the model names in TOML if your account uses another supported model. Only the selected provider key is required. No billing changes are needed for offline tests.
 
 From the repository root, start the isolated Compose project:
 
@@ -86,9 +86,23 @@ The sequential LangChain loop offers structured spending-summary, transaction, a
 
 Every response includes provider/model labels, a snapshot hash, evidence, and coverage caveats. A successful model response is not proof that its prose is correct: structured evidence remains authoritative. No conversation memory is persisted. A failed or limited run is labeled explicitly. The API is not yet connected to the dashboard or Photon worker.
 
+For an explicit live synthetic smoke test in the configured backend, run:
+
+```sh
+docker compose --env-file .env -p princeton-langchain-20261114 exec -T backend python scripts/smoke_ai.py --live --settings /app/settings.toml --env-file /dev/null --provider gemini
+```
+
+Use `--provider nemotron` for NVIDIA. This command uses the running container's configured keys and allows at most two model requests for one tool round trip. It sends one synthetic purchase, not loaded bank or property data. Output contains status, counts, and a bounded error category without credentials or raw provider errors. `--live` is mandatory; do not include it in automated offline checks. Runtime credentials/configuration are the ones loaded when that container was created.
+
 ## CoStar spatial credentials
 
 The supplied local CoStar catalog requires no API key. Its Matterport model references are metadata, not evidence that an interior was inspected, and recorded availability is not live availability.
+
+Set `costar_enabled = true` and `costar_data_dir = "/app/costardata"` in the selected TOML file, retain `APP_API_TOKEN`, and use `-f compose.yaml -f compose.costar.yaml` with Docker Compose. The override mounts `./costardata` read-only and refuses to create a missing host directory. The dataset is excluded from Git and Docker builds. Without the optional mount, the application reports unavailable catalog evidence instead of an empty successful search.
+
+`POST /api/v1/costar/search` accepts bounded state/city, bedroom, monthly rent, minimum area, audience, and model-reference filters. It cannot accept a source path. The service parses a bounded projection on the first search and caches that snapshot until backend restart. The response includes source hashes and distinguishes a declared snapshot date from an unknown date. File modification time is not treated as proof of current availability. Search results and the optional agent tool use the same service.
+
+Only exact property/floor-plan and same-property CSV model associations are treated as floor-plan references. Shared or ambiguous models are labeled, never promoted into verified room measurements. Defaults exclude specialized housing; callers must opt into those audiences explicitly. The catalog supports supplied Houston/Los Angeles data, not market-wide coverage.
 
 For later live Matterport access, [Matterport API setup](https://developers.matterport.com/api/) uses **Settings > Developer Tools > API Token Management**. Map the Token ID to `MATTERPORT_API_KEY` and the Token Secret to `MATTERPORT_API_TOKEN`. The separate `MATTERPORT_SDK_KEY` is for an interactive browser SDK; an API token does not replace it. A personal key may not grant access to sponsor-owned models; use the event's provided access instructions.
 

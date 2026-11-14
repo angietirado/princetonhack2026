@@ -11,9 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from standardwebhooks.webhooks import Webhook, WebhookVerificationError
+from starlette.concurrency import run_in_threadpool
 
 from spending_api.agent_tools import SpendingTools
 from spending_api.config import Settings, load_settings
+from spending_api.costar import CostarCatalog, CostarSearchCriteria
 from spending_api.dashboard import build_dashboard
 from spending_api.llm import AgentAnswer, answer_spending
 from spending_api.models import (
@@ -51,6 +53,10 @@ def _unique_json_object(pairs):
 
 
 async def _bounded_json(request: Request) -> dict:
+    if request.query_params:
+        raise HTTPException(
+            422, "Use supported fields in the JSON body; query parameters are not accepted"
+        )
     if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
         raise HTTPException(415, "Use application/json")
     raw = bytearray()
@@ -79,6 +85,17 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
     bearer = HTTPBearer(auto_error=False)
     # A single request per worker prevents an unbounded queue of paid model work.
     agent_lock = asyncio.Lock()
+    catalog_lock = asyncio.Lock()
+    catalog = (
+        CostarCatalog(
+            settings.costar_data_dir,
+            snapshot_date=settings.costar_snapshot_date.isoformat()
+            if settings.costar_snapshot_date
+            else None,
+        )
+        if settings.costar_enabled
+        else None
+    )
 
     def authorize(
         request: Request,
@@ -122,6 +139,7 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
             if settings.llm_provider == "gemini"
             else settings.nemotron_model,
             "read_only": True,
+            "costar_enabled": settings.costar_enabled,
             "max_model_turns": settings.llm_max_model_turns,
             "max_tool_calls": settings.llm_max_tool_calls,
             "timeout_seconds": settings.llm_timeout_seconds,
@@ -153,7 +171,7 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
                 async with asyncio.timeout(settings.llm_timeout_seconds):
                     tools = await scoped_tools(None)
                     return await answer_spending(
-                        tools, question.question, settings, model=agent_model
+                        tools, question.question, settings, model=agent_model, catalog=catalog
                     )
             except TimeoutError:
                 raise HTTPException(504, "AI request deadline exceeded") from None
@@ -161,6 +179,34 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
                 raise HTTPException(
                     503, "Customer data cannot support a grounded AI answer"
                 ) from None
+
+    @app.post(
+        "/api/v1/costar/search",
+        dependencies=[Depends(authorize)],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {"schema": CostarSearchCriteria.model_json_schema()}
+                },
+            }
+        },
+    )
+    async def costar_search(request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        if catalog is None:
+            raise HTTPException(503, "CoStar catalog is disabled in the public settings file")
+        try:
+            criteria = CostarSearchCriteria.model_validate(await _bounded_json(request))
+        except ValidationError:
+            raise HTTPException(422, "Invalid catalog search filters") from None
+        if catalog_lock.locked():
+            raise HTTPException(429, "A catalog search is running; retry shortly")
+        async with catalog_lock:
+            result = await run_in_threadpool(catalog.search, criteria)
+        if result["status"] != "ok":
+            response.status_code = 503
+        return result
 
     @app.get("/api/v1/accounts", response_model=list[Account])
     async def accounts(tools: Annotated[SpendingTools, Depends(scoped_tools)]):

@@ -15,6 +15,42 @@ class DataSourceError(Exception):
     pass
 
 
+def _identifier(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DataSourceError("Nessie returned invalid or conflicting record identities")
+    return value
+
+
+def _reference(value: object) -> str | None:
+    return None if value is None else _identifier(value)
+
+
+def _unique_records(rows: object) -> dict[str, dict]:
+    """Deduplicate identical page overlaps, rejecting conflicts before scope filtering.
+
+    Compare raw JSON with types intact: Python equality would consider True, 1
+    and 1.0 equal and could hide an invalid financial value behind a duplicate.
+    """
+    if not isinstance(rows, list):
+        raise DataSourceError("Nessie returned invalid or conflicting record identities")
+    records, fingerprints = {}, {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise DataSourceError("Nessie returned invalid or conflicting record identities")
+        identifier = _identifier(row.get("id"))
+        try:
+            fingerprint = json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise DataSourceError(
+                "Nessie returned invalid or conflicting record identities"
+            ) from exc
+        if identifier in fingerprints and fingerprints[identifier] != fingerprint:
+            raise DataSourceError("Nessie returned invalid or conflicting record identities")
+        fingerprints[identifier] = fingerprint
+        records.setdefault(identifier, row)
+    return records
+
+
 async def collect_pages(client: httpx.AsyncClient, path: str) -> list[dict]:
     rows: list[dict] = []
     cursor = None
@@ -37,24 +73,37 @@ async def collect_pages(client: httpx.AsyncClient, path: str) -> list[dict]:
 
 
 def normalize(raw: dict, source: str, customer_id: str) -> Snapshot:
+    _identifier(customer_id)
+    all_accounts = _unique_records(raw["accounts"])
+    merchants = _unique_records(raw["merchants"])
+    all_transactions = _unique_records(raw["transactions"])
     accounts = [
-        Account.model_validate(a) for a in raw["accounts"] if a["customer_id"] == customer_id
+        Account.model_validate(a)
+        for a in all_accounts.values()
+        if _identifier(a.get("customer_id")) == customer_id
     ]
     account_ids = {a.id for a in accounts}
-    merchants = {m["id"]: m for m in raw["merchants"]}
-    all_transactions = {t["id"]: t for t in raw["transactions"]}
     transactions = []
     for tx in all_transactions.values():
+        endpoints = [_reference(tx.get(field)) for field in ("payer_id", "payee_id")]
         owner = next(
-            (tx.get(field) for field in ("payer_id", "payee_id") if tx.get(field) in account_ids),
+            (endpoint for endpoint in endpoints if endpoint in account_ids),
             None,
         )
         if owner is None:
             continue
-        merchant_id = tx.get("merchant_id")
-        if not merchant_id and tx.get("parent_transaction_id"):
-            parent = all_transactions.get(tx["parent_transaction_id"], {})
-            merchant_id = parent.get("merchant_id")
+        merchant_id = _reference(tx.get("merchant_id"))
+        if merchant_id is None and tx.get("kind") == "refund":
+            parent_id = _reference(tx.get("parent_transaction_id"))
+            parent = all_transactions.get(parent_id, {})
+            # A purchase belongs to its payer. An owned payee on a foreign
+            # purchase must not make that purchase a valid refund parent.
+            if (
+                parent.get("kind") == "purchase"
+                and parent.get("status") == "completed"
+                and parent.get("payer_id") == owner
+            ):
+                merchant_id = _reference(parent.get("merchant_id"))
         merchant = merchants.get(merchant_id, {})
         occurred = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00"))
         if occurred.tzinfo is None:

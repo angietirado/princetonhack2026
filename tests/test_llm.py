@@ -532,3 +532,36 @@ def test_recurring_is_only_a_candidate_with_evidence():
     assert result["candidates"][0]["transaction_ids"] == ["month-9", "month-10", "month-11"]
     assert result["candidates"][0]["confidence"] == "candidate"
     assert "No confirmed subscriptions" in result["limitations"]
+
+
+@pytest.mark.parametrize("status,category", [
+    (401, "authentication_rejected"), (403, "authorization_rejected"),
+    (400, "invalid_request"), (429, "rate_limited"), (503, "provider_error"),
+    ("private-response-value", "unknown"), (True, "unknown"),
+])
+def test_smoke_diagnostic_uses_status_without_error_text(status, category):
+    from scripts.smoke_ai import DiagnosticModel
+
+    provider = ScriptedModel(Exception("private-token-and-provider-response"))
+    provider._async_client = SimpleNamespace(last_response=SimpleNamespace(status=status))
+    diagnostic = DiagnosticModel(provider)
+    diagnostic.bind_tools([])
+    with pytest.raises(Exception):
+        asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
+    assert diagnostic.failure["type"] == "Exception"
+    assert diagnostic.failure["category"] == category
+    assert diagnostic.failure["http_status"] == (status if type(status) is int else None)
+    assert "private" not in json.dumps(diagnostic.failure)
+
+
+def test_smoke_diagnostic_never_makes_more_than_two_requests():
+    from scripts.smoke_ai import DiagnosticModel
+
+    provider = ScriptedModel(AIMessage(content="first"), AIMessage(content="second"))
+    diagnostic = DiagnosticModel(provider)
+    asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
+    asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
+    with pytest.raises(RuntimeError, match="limit"):
+        asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
+    assert len(provider.messages) == 2
+    assert diagnostic.failure["category"] == "local_call_limit"

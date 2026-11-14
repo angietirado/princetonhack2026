@@ -32,7 +32,10 @@ def test_dashboard_preserves_money_invariants_and_separates_card_debt():
     assert "private" not in {row.id for row in data.transactions}
     assert data.gross_spending_cents - data.refunds_cents == data.summary.net_spending_cents
     assert sum(row.amount_cents for row in data.expense_categories) == data.gross_spending_cents
-    assert sum(row.net_spending_cents for row in data.monthly_spending) == data.summary.net_spending_cents
+    assert (
+        sum(row.net_spending_cents for row in data.monthly_spending)
+        == data.summary.net_spending_cents
+    )
     assert data.summary.included_count + data.summary.excluded_count == len(data.transactions)
 
 
@@ -63,11 +66,18 @@ def test_dashboard_route_protects_one_consistent_date_scoped_payload(tmp_path):
         assert response.headers["cache-control"] == "no-store"
         data = response.json()
         assert data["summary"]["start"] == "2026-11-01"
-        assert all("2026-11-01" <= row["occurred_at"][:10] <= "2026-11-13"
-                   for row in data["transactions"])
-        assert data["summary"] == client.get(
-            "/api/v1/spending/summary?start=2026-11-01&end=2026-11-13", headers=headers
-        ).json()
-        assert client.get(
-            "/api/v1/dashboard?start=2026-12-01&end=2026-11-01", headers=headers
-        ).status_code == 422
+        assert all(
+            "2026-11-01" <= row["occurred_at"][:10] <= "2026-11-13" for row in data["transactions"]
+        )
+        assert (
+            data["summary"]
+            == client.get(
+                "/api/v1/spending/summary?start=2026-11-01&end=2026-11-13", headers=headers
+            ).json()
+        )
+        assert (
+            client.get(
+                "/api/v1/dashboard?start=2026-12-01&end=2026-11-01", headers=headers
+            ).status_code
+            == 422
+        )

@@ -28,7 +28,7 @@ class PublicSettings(BaseModel):
     llm_provider: Literal["gemini", "nemotron"] = "gemini"
     gemini_model: str = Field(default="gemini-3.8-flash", min_length=1, max_length=160)
     nemotron_model: str = Field(
-        default="nvidia/nemotron-3-super-120b-a12b", min_length=1, max_length=160
+        default="nvidia/nemotron-3.5-lightning-30b-a3b", min_length=1, max_length=160
     )
     llm_max_model_turns: int = Field(default=4, ge=1, le=8)
     llm_max_tool_calls: int = Field(default=6, ge=1, le=12)
@@ -57,6 +57,8 @@ class Settings(PublicSettings, BaseSettings):
 
     @model_validator(mode="after")
     def require_live_credentials(self):
+        if self.costar_enabled and not self.app_api_token.get_secret_value():
+            raise ValueError("Enabled CoStar catalog requires APP_API_TOKEN in the environment")
         if self.llm_enabled:
             key = self.gemini_api_key if self.llm_provider == "gemini" else self.nvidia_api_key
             if not key.get_secret_value() or not self.app_api_token.get_secret_value():

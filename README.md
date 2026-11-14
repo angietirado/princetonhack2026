@@ -104,6 +104,18 @@ Open **http://127.0.0.1:8765/docs**, choose **Authorize**, enter `APP_API_TOKEN`
 
 The answer's `status` must be `answered` before treating its prose as a completed response. `limited` or `unavailable` responses explain the failure and can include partial tool evidence. Evidence is calculated from observed records; model prose is an interpretation, and missing history is not proof of zero spending. Recurring results remain candidates.
 
+## CoStar catalog search
+
+Place the supplied data kit in the ignored `costardata/` directory and set `costar_enabled = true` in your selected settings file. The sample AI settings already point to `/app/costardata`. The catalog needs `APP_API_TOKEN` but no vendor key. Mount it read-only with the optional Compose file:
+
+```sh
+docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml up --build --detach --wait
+```
+
+Try `POST /api/v1/costar/search` in the API docs with `{"state":"TX","bedrooms":1,"max_monthly_rent_usd":1800,"limit":5}`. This deterministic route works even with AI disabled. When both integrations are enabled, the question API also offers the model a `costar_search` tool.
+
+Results include recorded rent ranges, source evidence, coverage limits, and associated Matterport IDs. An asking-rent minimum below the filter does not mean the whole range is affordable; check `price_range_within_budget`. Availability is historical, and a model reference does not mean an interior was inspected. No tour booking, live Matterport geometry, or Vexcel imagery request is implemented.
+
 ## What runs today
 
 - FastAPI with a unified dashboard snapshot, accounts, transactions, spending summaries, recurring-charge candidates, and OpenAPI documentation.
