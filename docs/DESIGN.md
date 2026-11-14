@@ -94,6 +94,12 @@ Bind `SpendingTools` to an authorized snapshot before exposing methods to a mode
 
 Keep arithmetic in Python. Model text should quote tool results and identify the date range. If data or a tool fails, say that the analysis is unavailable instead of inventing a total. Gemini and NVIDIA Nemotron share the same bounded multi-agent interface. Model interpretation remains separate from deterministic evidence.
 
+The question API is stateless unless a client explicitly opts into recent questions. The bounded context contains only accepted user questions and the latest validated missing-input enum codes, never prior assistant prose, tool rows, plans, or reasoning. Every turn binds a fresh snapshot before constructing a fresh graph and budget. Stored scope combines the application epoch and bearer fingerprint with source selector, customer identity, and snapshot hash. An ambiguous fixture customer cannot support context; a new request falls back visibly to stateless operation, while an invalid continuation fails before provider invocation.
+
+Each worker holds at most eight contexts, four accepted turns per context, and 8 KiB of compact UTF-8 JSON text per context. Ten-minute absolute expiry is checked on access with a 30-second lifespan-owned cleanup sweep; this is a logical retention bound, not physical memory erasure. Successful answers and clarifications update revision and eviction recency without extending expiry. Failed turns roll back; cleared or expired in-flight leases cannot reinsert themselves. Continuations use an opaque ID and exact revision; stale, missing, changed-source, or oversized continuations return a fixed restart response. There is no cross-worker store or persistent checkpointer.
+
+The browser starts unchecked, stores context only in page memory, and accepts a result and receipt together after request-generation, source, ID, and revision checks. New question, examples, refresh, lock, token changes, or Stop waiting discard context. Clearing a known ID is best effort; an initial request cancelled before its ID arrives can leave a bounded server entry until expiry. Browser abort does not guarantee provider cancellation. Terminal and Photon paths remain stateless, and the shared app bearer is not multi-user identity.
+
 ## Money and data semantics
 
 - Store and calculate USD amounts as integer cents; format dollars only at the UI or reply boundary.
@@ -119,6 +125,7 @@ The app reads customer accounts, merchants, and the tenant transaction list, the
 | `GET /api/v1/spending/recurring?start=...&end=...` | Recurring-charge candidates |
 | `GET /api/v1/agent/status` | Optional assistant availability and selected provider |
 | `POST /api/v1/agent/answer` | Bounded LangChain question with read-only tools and evidence |
+| `POST /api/v1/agent/context/clear` | Forget an optional context scoped to the current app bearer; idempotent for unknown IDs |
 | `POST /api/v1/costar/search` | Filter the supplied local apartment catalog with explicit coverage limits |
 | `POST /webhooks/photon` | Signed provider events; durable receipt only |
 | `GET /docs` and `GET /openapi.json` | Executable API contract |

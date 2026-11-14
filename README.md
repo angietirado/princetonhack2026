@@ -126,11 +126,17 @@ This preserves its generated-data volume; do not add `--volumes`. Stop only the 
 docker compose --env-file .env -p princeton-langchain-20261114 up --build --detach --wait
 ```
 
-Open **http://127.0.0.1:5173**, unlock with `APP_API_TOKEN`, and select **Ask your books**. The page checks availability before enabling questions and displays the answer, tool evidence, and limitations. Example buttons fill the question without submitting it. Each question starts a new context: include dates and filters explicitly, including in follow-ups. Dashboard date filters are not applied automatically.
+Open **http://127.0.0.1:5173**, unlock with `APP_API_TOKEN`, and select **Ask your books**. The page checks availability before enabling questions and displays the answer, tool evidence, and limitations. Example buttons fill the question without submitting it. By default each question starts fresh. Include dates and filters explicitly; dashboard date filters are not applied automatically.
+
+For a short follow-up, select **Keep recent questions** before submitting. The server keeps at most four accepted questions and the latest missing-input codes, within 8 KiB of canonical JSON text and ten minutes from the first question. Earlier answers and tool results are not retained. Each turn loads fresh evidence and starts a new model/tool budget. The page shows which questions were accepted; `limited` and `unavailable` results do not add a turn.
+
+**New question** forgets the context and preserves your draft without submitting it. Examples start a new question too. Turning the option off, locking, refreshing, or stopping a pending answer clears local context and attempts to clear a known server context. A changed snapshot, expired context, or uncertain response requires an explicit restart; the page never silently resends a follow-up as a standalone question. If you stop waiting before receiving an initial context ID, the server may retain that bounded context until expiry. Stopping the browser request does not guarantee that provider work stops.
 
 The same interface is available at **http://127.0.0.1:8765/docs**: choose **Authorize**, enter `APP_API_TOKEN`, and invoke `POST /api/v1/agent/answer` with `{"question":"Summarize spending from 2026-11-01 through 2026-11-13."}`. `GET /api/v1/agent/status` reports the selected provider without exposing keys.
 
-The answer's `status` must be `answered` before treating its prose as a completed response. `clarification` asks for missing inputs; resubmit a complete question. `limited` or `unavailable` responses explain the failure and can include partial tool evidence. Evidence is calculated from observed records; model prose is an interpretation, and missing history is not proof of zero spending. Recurring results remain candidates.
+The answer's `status` must be `answered` before treating its prose as a completed response. `clarification` asks for missing inputs; provide the details in a follow-up when recent questions are active, otherwise resubmit a complete question. `limited` or `unavailable` responses explain the failure and can include partial tool evidence. Evidence is calculated from observed records; model prose is an interpretation, and missing history is not proof of zero spending. Recurring results remain candidates.
+
+API clients can opt in with `{"question":"Summarize my spending.","conversation":{"mode":"new"}}`, then send `{"question":"From November 1 through November 7, 2026.","conversation":{"mode":"continue","id":"<returned ID>","revision":1}}` using the exact returned active revision. `POST /api/v1/agent/context/clear` accepts only `{"id":"<returned ID>"}`. All routes use the existing app bearer. Context lives only in the worker's memory (at most eight entries), expires after ten minutes without renewal, and is lost on restart or eviction. The shared app bearer represents one principal, not separate user accounts. Terminal requests and Photon quick controls remain stateless.
 
 ## CoStar catalog search
 
@@ -165,7 +171,7 @@ You can also ask the running API from the backend terminal:
 docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas with starting rent under 1800 USD monthly. Show full asking ranges and historical availability caveats."
 ```
 
-The terminal makes one authenticated request to the local API. Each question needs its own dates and filters; conversation memory is not yet persisted.
+The terminal makes one stateless authenticated request to the local API. Each question needs its own dates and filters; the web page's optional recent questions are not shared with the terminal.
 
 ## What runs today
 

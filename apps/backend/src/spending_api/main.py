@@ -1,8 +1,10 @@
 import asyncio
+import hashlib
+import hmac
 import json
 import secrets
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import date
 from typing import Annotated
 
@@ -10,13 +12,27 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from standardwebhooks.webhooks import Webhook, WebhookVerificationError
 from starlette.concurrency import run_in_threadpool
 
 from spending_api.agent_tools import SpendingTools
 from spending_api.comparison import ComparisonRequest, SpendingComparison, compare_spending
 from spending_api.config import Settings, load_settings
+from spending_api.conversation import (
+    CONVERSATION_SWEEP_SECONDS,
+    ConversationBusyError,
+    ConversationReference,
+    ConversationResetError,
+    ConversationScope,
+    ConversationStore,
+)
+from spending_api.conversation_contract import (
+    ClearConversation,
+    ContinueConversation,
+    ConversationReceipt,
+    ConversationRequest,
+)
 from spending_api.costar import CostarCatalog, CostarSearchCriteria
 from spending_api.dashboard import build_dashboard
 from spending_api.llm import AgentAnswer, answer_spending
@@ -35,6 +51,7 @@ from spending_api.photon import enqueue_event, parse_incoming, scope_hash
 class AgentQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     question: str = Field(min_length=1, max_length=2000)
+    conversation: ConversationRequest | None = None
 
     @field_validator("question")
     @classmethod
@@ -64,6 +81,28 @@ def _comparison_schema():
     return schema
 
 
+def _inline_request_schema(model: type[BaseModel]) -> dict:
+    """Inline request-only models not registered as FastAPI body parameters."""
+    schema = model.model_json_schema()
+    definitions = schema.pop("$defs", {})
+
+    def resolve(value):
+        if isinstance(value, list):
+            return [resolve(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        reference = value.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#/$defs/"):
+            resolved = resolve(definitions[reference.rsplit("/", 1)[-1]])
+            resolved.update({key: resolve(item) for key, item in value.items() if key != "$ref"})
+            return resolved
+        # Literal tags in the inlined oneOf still discriminate the alternatives;
+        # the original discriminator mapping would point at document-root $defs.
+        return {key: resolve(item) for key, item in value.items() if key != "discriminator"}
+
+    return resolve(schema)
+
+
 async def _bounded_json(request: Request) -> dict:
     if request.query_params:
         raise HTTPException(
@@ -90,6 +129,46 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
     comparison_lock = asyncio.Lock()
     comparison_job: asyncio.Task[SpendingComparison] | None = None
     comparison_closing = False
+    conversations = ConversationStore()
+    context_key = secrets.token_bytes(32)
+    receipt_adapter = TypeAdapter(ConversationReceipt)
+
+    def context_fingerprint(label: str, value: str) -> str:
+        payload = json.dumps([label, value], ensure_ascii=True, separators=(",", ":")).encode()
+        return hmac.new(context_key, payload, hashlib.sha256).hexdigest()
+
+    def context_authority() -> str:
+        return context_fingerprint("authority", settings.app_api_token.get_secret_value())
+
+    def context_scope(bound: SpendingTools, source_hash: str, authority: str):
+        source = bound.snapshot.source
+        if source != settings.data_source:
+            return None
+        if source == "nessie":
+            customer = settings.nessie_customer_id
+            selector = settings.nessie_base_url.rstrip("/")
+        elif source == "fixture":
+            customers = {account.customer_id for account in bound.snapshot.accounts}
+            if len(customers) != 1:
+                return None
+            customer = next(iter(customers))
+            selector = str(settings.fixture_path.absolute())
+        else:
+            return None
+        if not isinstance(customer, str) or not customer.strip():
+            return None
+        return ConversationScope(
+            authority=authority,
+            source=source,
+            selector=context_fingerprint("source-selector", selector),
+            customer_id=context_fingerprint("customer", customer),
+            source_hash=source_hash,
+        )
+
+    async def expire_conversations() -> None:
+        while True:
+            await asyncio.sleep(CONVERSATION_SWEEP_SECONDS)
+            conversations.sweep()
 
     def comparison_finished(job: asyncio.Task[SpendingComparison]) -> None:
         nonlocal comparison_job, comparison_closing
@@ -105,10 +184,15 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
     @asynccontextmanager
     async def lifespan(_app):
         nonlocal comparison_closing
+        expiry_job = asyncio.create_task(expire_conversations(), name="conversation-expiry")
         try:
             yield
         finally:
             comparison_closing = True
+            conversations.close()
+            expiry_job.cancel()
+            with suppress(asyncio.CancelledError):
+                await expiry_job
             # A source load remains request-owned and cancellable. Wait until it
             # releases admission before reading the retained native-job slot.
             async with comparison_lock:
@@ -196,11 +280,12 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
     @app.post(
         "/api/v1/agent/answer",
         response_model=AgentAnswer,
+        response_model_exclude_none=True,
         dependencies=[Depends(authorize)],
         openapi_extra={
             "requestBody": {
                 "required": True,
-                "content": {"application/json": {"schema": AgentQuestion.model_json_schema()}},
+                "content": {"application/json": {"schema": _inline_request_schema(AgentQuestion)}},
             }
         },
     )
@@ -211,26 +296,103 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
         try:
             question = AgentQuestion.model_validate(await _bounded_json(request))
         except ValidationError:
-            raise HTTPException(422, "Provide only a question of 1 to 2000 characters") from None
+            raise HTTPException(
+                422, "Provide a question of 1 to 2000 characters and supported conversation fields"
+            ) from None
         if agent_lock.locked():
             raise HTTPException(429, "An AI request is already running; retry shortly")
         async with agent_lock:
+            lease = None
+            scope_unavailable = False
+            bound_source_hash = None
+            authority = context_authority()
+            reference = (
+                ConversationReference(question.conversation.id, question.conversation.revision)
+                if isinstance(question.conversation, ContinueConversation)
+                else None
+            )
+
+            def prepare_context(bound: SpendingTools, source_hash: str):
+                nonlocal lease, scope_unavailable, bound_source_hash
+                bound_source_hash = source_hash
+                scope = context_scope(bound, source_hash, authority)
+                if scope is None:
+                    if reference is not None:
+                        conversations.forget(reference.id, authority)
+                        raise ConversationResetError()
+                    scope_unavailable = True
+                    return None
+                lease = conversations.begin(question.question, scope, reference)
+                return lease.history
+
             try:
+                if reference is not None:
+                    conversations.preflight(question.question, reference, authority)
                 async with asyncio.timeout(settings.llm_timeout_seconds):
                     tools = await scoped_tools(None)
-                    return await answer_spending(
+                    options = {"model": agent_model, "catalog": catalog}
+                    if question.conversation is not None:
+                        options["prepare_context"] = prepare_context
+                    result = await answer_spending(
                         tools,
                         question.question,
                         settings,
-                        model=agent_model,
-                        catalog=catalog,
+                        **options,
                     )
+                    if question.conversation is not None:
+                        if bound_source_hash is None or result.source_hash != bound_source_hash:
+                            raise ValueError("Invalid conversation result scope")
+                        if scope_unavailable:
+                            receipt = {
+                                "state": "closed", "reason": "scope_unavailable", "turns_used": 0
+                            }
+                        else:
+                            try:
+                                receipt = conversations.finish(
+                                    lease, result.status, result.needed_inputs
+                                )
+                            except ConversationResetError:
+                                raise HTTPException(
+                                    503, "AI returned invalid context state"
+                                ) from None
+                        result.conversation = (
+                            receipt_adapter.validate_python(receipt)
+                            if receipt is not None
+                            else None
+                        )
+                    return result
+            except ConversationResetError as exc:
+                raise HTTPException(409, str(exc), headers={"Cache-Control": "no-store"}) from None
+            except ConversationBusyError as exc:
+                raise HTTPException(429, str(exc), headers={"Cache-Control": "no-store"}) from None
             except TimeoutError:
                 raise HTTPException(504, "AI request deadline exceeded") from None
             except (OSError, ValueError, KeyError, TypeError):
                 raise HTTPException(
                     503, "Customer data cannot support a grounded AI answer"
                 ) from None
+            finally:
+                if lease is not None:
+                    conversations.rollback(lease)
+
+    @app.post(
+        "/api/v1/agent/context/clear",
+        status_code=204,
+        dependencies=[Depends(authorize)],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": ClearConversation.model_json_schema()}},
+            }
+        },
+    )
+    async def clear_conversation(request: Request):
+        try:
+            cleared = ClearConversation.model_validate(await _bounded_json(request))
+        except ValidationError:
+            raise HTTPException(422, "Provide only a valid conversation ID") from None
+        conversations.forget(cleared.id, context_authority())
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
     @app.post(
         "/api/v1/costar/search",

@@ -1537,3 +1537,213 @@ test("answer diagnostics are collapsed after evidence while source context remai
   assert.match(app.get("ask-revision").textContent, /11111111/);
   assert.doesNotMatch(app.get("ask-provider").textContent, /synthetic-model/);
 });
+
+function conversationReceipt(overrides = {}) {
+  return { state: "active", id: "c".repeat(64), revision: 1, turns_used: 1,
+    expires_at: new Date(Date.now() + 600000).toISOString(), ...overrides };
+}
+function conversationAnswer(receipt, overrides = {}) {
+  return agentAnswer({ needed_inputs: [], ...overrides, conversation: receipt });
+}
+function contextBoot(t, answer, clear = () => response(null, 204)) {
+  return boot(t, (url, options) => {
+    if (url === "/api/v1/agent/answer") return answer(options);
+    if (url === "/api/v1/agent/context/clear") return clear(options);
+    return askRoute(url);
+  });
+}
+function keepContext(app, checked = true) {
+  app.get("ask-keep-context").checked = checked;
+  app.get("ask-keep-context").dispatchEvent(new app.window.Event("change", { bubbles: true }));
+}
+const contextAnswerCalls = (app) => app.calls.filter((call) => call.url === "/api/v1/agent/answer");
+const contextClearCalls = (app) => app.calls.filter((call) => call.url === "/api/v1/agent/context/clear");
+async function startContext(app, question = "Original goal") {
+  await tick(); await openAsk(app); keepContext(app);
+  typeQuestion(app, question); app.submit("ask-form"); await tick();
+}
+
+test("conversation UI is explicitly opt-in and unchecked requests remain exactly stateless", async (t) => {
+  const app = contextBoot(t, () => response(agentAnswer()));
+  await tick(); await openAsk(app);
+  assert.equal(app.get("ask-keep-context").type, "checkbox");
+  assert.equal(app.get("ask-keep-context").checked, false);
+  typeQuestion(app, "Standalone question"); app.submit("ask-form"); await tick();
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[0].options.body), { question: "Standalone question" });
+  assert.equal(app.get("ask-context-questions").children.length, 0);
+  assert.equal(contextClearCalls(app).length, 0);
+});
+
+test("conversation UI sends only captured receipt fields and renders hostile questions as text", async (t) => {
+  const first = conversationReceipt(); let count = 0;
+  const app = contextBoot(t, () => response(conversationAnswer({ ...first, revision: ++count, turns_used: count })));
+  const question = '<img id="context-injected" src=x onerror=alert(1)> "quoted" original goal';
+  await startContext(app, question);
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[0].options.body), { question, conversation: { mode: "new" } });
+  assert.equal(app.get("ask-context-questions").children.length, 1);
+  assert.ok(app.get("ask-context-questions").textContent.includes(question));
+  assert.equal(app.get("context-injected"), undefined);
+  typeQuestion(app, "What about the same period?"); app.submit("ask-form"); await tick();
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[1].options.body), {
+    question: "What about the same period?", conversation: { mode: "continue", id: first.id, revision: 1 },
+  });
+  assert.equal(app.get("ask-context-questions").children.length, 2);
+  assert.equal(app.get("ask-context-questions").querySelector("img,script"), null);
+  assert.equal(app.window.localStorage.length + app.window.sessionStorage.length, 0);
+  assert.equal(app.calls.some((call) => call.url.includes(first.id)), false);
+  assert.equal(app.window.location.href.includes(first.id), false);
+});
+
+test("conversation UI clarification reply keeps the original goal without resubmitting it as history", async (t) => {
+  const first = conversationReceipt(); let count = 0;
+  const app = contextBoot(t, () => ++count === 1
+    ? response(conversationAnswer(first, { status: "clarification", answer: "Please provide dates.", evidence: [], needed_inputs: ["date_range"] }))
+    : response(conversationAnswer({ ...first, revision: 2, turns_used: 2 })));
+  await startContext(app, "Compare spending");
+  typeQuestion(app, "November 1-7 and November 8-14, 2026."); app.submit("ask-form"); await tick();
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[1].options.body), {
+    question: "November 1-7 and November 8-14, 2026.",
+    conversation: { mode: "continue", id: first.id, revision: 1 },
+  });
+  assert.equal(app.get("ask-context-questions").children.length, 2);
+  assert.match(app.get("ask-context-questions").textContent, /Compare spending/);
+});
+
+for (const status of ["limited", "unavailable"]) {
+  test("conversation UI " + status + " keeps the prior revision and excludes the unsuccessful question", async (t) => {
+    const first = conversationReceipt(); let count = 0;
+    const app = contextBoot(t, () => {
+      count += 1;
+      return response(conversationAnswer(count === 3 ? { ...first, revision: 2, turns_used: 2 } : first,
+        count === 2 ? { status, evidence: [] } : {}));
+    });
+    await startContext(app);
+    typeQuestion(app, "UNSUCCESSFUL TURN"); app.submit("ask-form"); await tick();
+    assert.equal(app.get("ask-context-questions").children.length, 1);
+    assert.doesNotMatch(app.get("ask-context-questions").textContent, /UNSUCCESSFUL TURN/);
+    typeQuestion(app, "Replacement"); app.submit("ask-form"); await tick();
+    assert.equal(JSON.parse(contextAnswerCalls(app)[2].options.body).conversation.revision, 1);
+    assert.equal(app.get("ask-context-questions").children.length, 2);
+  });
+}
+
+test("conversation UI New question preserves the draft and explicitly restarts without submitting", async (t) => {
+  const first = conversationReceipt();
+  const app = contextBoot(t, () => response(conversationAnswer(first)));
+  await startContext(app);
+  typeQuestion(app, "Draft for another goal");
+  app.click("ask-new-question"); await tick();
+  assert.equal(contextAnswerCalls(app).length, 1);
+  assert.equal(app.get("ask-question").value, "Draft for another goal");
+  assert.equal(app.document.activeElement, app.get("ask-question"));
+  assert.equal(app.get("ask-context-questions").children.length, 0);
+  assert.equal(app.get("ask-answer").textContent, "");
+  assert.equal(app.get("ask-keep-context").checked, true);
+  assert.deepEqual(JSON.parse(contextClearCalls(app)[0].options.body), { id: first.id });
+  app.submit("ask-form"); await tick();
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[1].options.body), {
+    question: "Draft for another goal", conversation: { mode: "new" },
+  });
+});
+
+test("conversation UI unchecking explicitly forgets context and chooses stateless submission", async (t) => {
+  const first = conversationReceipt(); let count = 0;
+  const app = contextBoot(t, () => response(++count === 1 ? conversationAnswer(first) : agentAnswer()));
+  await startContext(app);
+  typeQuestion(app, "Complete independent question"); keepContext(app, false); await tick();
+  assert.equal(contextAnswerCalls(app).length, 1);
+  assert.equal(app.get("ask-context-questions").children.length, 0);
+  assert.equal(contextClearCalls(app).length, 1);
+  app.submit("ask-form"); await tick();
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[1].options.body), { question: "Complete independent question" });
+});
+
+test("conversation UI unknown scope visibly returns to stateless mode", async (t) => {
+  let count = 0;
+  const app = contextBoot(t, () => response(++count === 1
+    ? conversationAnswer({ state: "closed", reason: "scope_unavailable", turns_used: 0 }) : agentAnswer()));
+  await startContext(app);
+  assert.equal(app.get("ask-result").classList.contains("hidden"), false);
+  assert.equal(app.get("ask-keep-context").checked, false);
+  assert.equal(app.get("ask-context-questions").children.length, 0);
+  assert.match(app.get("ask-context-note").textContent, /scope|customer|stateless|complete question/i);
+  typeQuestion(app, "A complete question"); app.submit("ask-form"); await tick();
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[1].options.body), { question: "A complete question" });
+});
+
+test("conversation UI four accepted turns require explicit restart before another contextual request", async (t) => {
+  const first = conversationReceipt(); let count = 0;
+  const app = contextBoot(t, () => {
+    count += 1;
+    return response(conversationAnswer(count === 4
+      ? { state: "closed", reason: "turn_limit", turns_used: 4 }
+      : { ...first, revision: count > 4 ? 1 : count, turns_used: count > 4 ? 1 : count }));
+  });
+  await startContext(app);
+  for (let turn = 2; turn <= 4; turn++) {
+    typeQuestion(app, "Follow-up " + turn); app.submit("ask-form"); await tick();
+  }
+  assert.equal(contextAnswerCalls(app).length, 4);
+  assert.ok(app.get("ask-context-questions").children.length <= 4);
+  typeQuestion(app, "Fifth must wait for restart"); app.submit("ask-form"); await tick();
+  assert.equal(contextAnswerCalls(app).length, 4);
+  assert.match(app.get("ask-context-note").textContent, /new question|restart|limit/i);
+  app.click("ask-new-question"); app.submit("ask-form"); await tick();
+  assert.equal(contextAnswerCalls(app).length, 5);
+  assert.deepEqual(JSON.parse(contextAnswerCalls(app)[4].options.body).conversation, { mode: "new" });
+});
+
+for (const overflow of [false, true]) {
+  test("conversation UI canonical UTF-8 " + (overflow ? "overflow is blocked" : "exact byte limit is accepted") + " with escaped questions", async (t) => {
+    const first = conversationReceipt(); let count = 0;
+    const app = contextBoot(t, () => {
+      count += 1;
+      return response(conversationAnswer(count === 3
+        ? { state: "closed", reason: "byte_limit", turns_used: 3 }
+        : { ...first, revision: count, turns_used: count }));
+    });
+    const earlier = ['é\\"'.repeat(600), "é".repeat(2000)];
+    await startContext(app, earlier[0]);
+    typeQuestion(app, earlier[1]); app.submit("ask-form"); await tick();
+    const overhead = Buffer.byteLength(JSON.stringify({ questions: [...earlier, ""], needed_inputs: [] }), "utf8");
+    const third = "x".repeat(8192 - overhead + Number(overflow));
+    assert.ok(third.length > 0 && third.length <= 2000);
+    typeQuestion(app, third); app.submit("ask-form"); await tick();
+    assert.equal(contextAnswerCalls(app).length, overflow ? 2 : 3);
+    if (!overflow) assert.equal(app.get("ask-result").classList.contains("hidden"), false);
+    assert.ok(app.get("ask-context-questions").children.length <= 3);
+  });
+}
+
+const invalidConversationReceipts = [
+  ["wrong ID", (body) => { body.conversation.id = "d".repeat(64); }],
+  ["stale revision", (body) => { body.conversation.revision = 1; }],
+  ["jumped revision", (body) => { body.conversation.revision = 3; }],
+  ["inconsistent turns", (body) => { body.conversation.turns_used = 1; }],
+  ["changed source hash", (body) => { body.source_hash = "2".repeat(64); }],
+  ["invalid expiry", (body) => { body.conversation.expires_at = "private-invalid-expiry"; }],
+  ["extended expiry", (body) => { body.conversation.expires_at = new Date(Date.now() + 1200000).toISOString(); }],
+  ["unexpected scope field", (body) => { body.conversation.customer_id = "PRIVATE_SCOPE_FIELD"; }],
+  ["missing receipt", (body) => { delete body.conversation; }],
+];
+for (const [name, mutate] of invalidConversationReceipts) {
+  test("conversation UI rejects " + name + " atomically and requires restart", async (t) => {
+    const first = conversationReceipt(); let count = 0;
+    const app = contextBoot(t, () => {
+      if (++count === 1) return response(conversationAnswer(first));
+      const body = conversationAnswer({ ...first, revision: 2, turns_used: 2 }, { answer: "UNACCEPTED_CONTEXT_RESULT" });
+      mutate(body); return response(body);
+    });
+    await startContext(app);
+    typeQuestion(app, "Draft that must survive"); app.submit("ask-form"); await tick();
+    assert.equal(app.get("ask-result").classList.contains("hidden"), true);
+    assert.equal(app.get("ask-answer").textContent, "");
+    assert.equal(app.get("ask-context-questions").children.length, 0);
+    assert.equal(app.get("ask-question").value, "Draft that must survive");
+    assert.doesNotMatch(app.document.body.textContent, /UNACCEPTED_CONTEXT_RESULT|PRIVATE_SCOPE_FIELD|private-invalid-expiry/);
+    app.submit("ask-form"); await tick();
+    assert.equal(contextAnswerCalls(app).length, 2);
+    assert.match(app.get("ask-context-note").textContent, /new question|restart|clear/i);
+    assert.ok(contextClearCalls(app).some((call) => JSON.parse(call.options.body).id === first.id));
+  });
+}

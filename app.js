@@ -37,6 +37,12 @@
   let askStatusLoading = false;
   let askPending = false;
   let askTimer = null;
+  let askConversation = null;
+  let askContextBlocked = false;
+  let askContextNotice = "";
+  let askContextTimer = null;
+  let contextClearController = null;
+  let contextClearTimer = null;
   let dashboardLoading = false;
   let answerContext = 0;
   let catalogSequence = 0;
@@ -102,6 +108,7 @@
   function lock() {
     sequence += 1;
     controller?.abort();
+    forgetAskContext();
     token = "";
     dashboardLoading = false;
     clearData();
@@ -193,11 +200,143 @@
     event.preventDefault();
     const entered = $("app-token").value.trim();
     if (!entered) return;
+    forgetAskContext();
     token = entered;
     $("app-token").value = "";
     void refresh();
   });
 
+  // Only question text and validated missing-input codes survive an accepted turn.
+  // Context is deliberately absent from browser storage, URLs, and tool evidence.
+  const contextInputCodes = new Set(["date_range", "location", "monthly_rent_budget", "bedrooms", "minimum_square_feet", "housing_preferences", "financial_goal", "comparison_options", "household_size", "income", "savings_target"]);
+  function contextBytes(questions, neededInputs) {
+    let bytes = 0;
+    for (const character of JSON.stringify({ questions, needed_inputs: neededInputs })) {
+      const point = character.codePointAt(0);
+      bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    }
+    return bytes;
+  }
+  function clearRemoteContext(id, capturedToken) {
+    contextClearController?.abort();
+    clearTimeout(contextClearTimer);
+    const pending = new AbortController();
+    contextClearController = pending;
+    contextClearTimer = setTimeout(() => pending.abort(), 5000);
+    void (async () => {
+      try {
+        await fetch("/api/v1/agent/context/clear", {
+          method: "POST", headers: { "Content-Type": "application/json", ...(capturedToken ? { Authorization: "Bearer " + capturedToken } : {}) },
+          body: JSON.stringify({ id }), cache: "no-store", redirect: "error", signal: pending.signal,
+        });
+      } catch { /* Local forgetting never depends on a network acknowledgment. */ }
+      finally {
+        if (contextClearController === pending) { clearTimeout(contextClearTimer); contextClearController = null; }
+      }
+    })();
+  }
+  function forgetAskContext({ blocked = false, notice = "", resetChoice = false } = {}) {
+    const identifier = askConversation?.receipt.state === "active" ? askConversation.receipt.id : null;
+    askConversation = null;
+    askContextBlocked = blocked && $("ask-keep-context").checked;
+    askContextNotice = notice;
+    clearTimeout(askContextTimer);
+    if (resetChoice) $("ask-keep-context").checked = false;
+    if (identifier) clearRemoteContext(identifier, token);
+    renderAskContext();
+  }
+  function renderAskContext() {
+    const checked = $("ask-keep-context").checked;
+    const receipt = askConversation?.receipt;
+    $("ask-context-note").textContent = askContextNotice || (!checked ? "Off: each question starts fresh." : receipt?.state === "active"
+      ? receipt.turns_used + " of 4 questions kept, for up to 10 minutes from the first question. Each answer reads fresh evidence."
+      : "Keep up to 4 questions for 10 minutes, within an 8 KB text limit. Earlier answers are not retained; each answer reads fresh evidence.");
+    $("ask-context-questions").replaceChildren();
+    for (const question of askConversation?.questions || []) $("ask-context-questions").append(node("li", question));
+    $("ask-context-questions").classList.toggle("hidden", !askConversation?.questions.length);
+  }
+  function restartAskQuestion() {
+    if (askPending) {
+      askSequence += 1;
+      askController?.abort();
+      clearTimeout(askTimer);
+      askController = null;
+      askPending = false;
+    }
+    forgetAskContext();
+    clearAskAnswer();
+    $("ask-error").textContent = "";
+    $("ask-state").textContent = "New question ready. Your draft is kept; nothing has been submitted.";
+    updateAskControls();
+    restoreCancelledFocus($("ask-question"), answerContext);
+  }
+  function validatedConversation(result, question, previous) {
+    const receipt = result.conversation;
+    const accepted = ["answered", "clarification"].includes(result.status);
+    const neededInputs = result.needed_inputs || [];
+    const priorTurns = previous?.receipt.turns_used || 0;
+    const turns = priorTurns + (accepted ? 1 : 0);
+    const questions = accepted ? [...(previous?.questions || []), question] : [...(previous?.questions || [])];
+    const invalid = () => { throw new Error("invalid conversation receipt"); };
+    if (!/^[a-f0-9]{64}$/.test(result.source_hash) || (previous && (result.source_hash !== previous.sourceHash || result.source !== previous.source))) invalid();
+    if (neededInputs.some((code) => !contextInputCodes.has(code)) || (result.status === "answered" && neededInputs.length)) invalid();
+    if (!receipt && !accepted && !previous) return null;
+    if (!object(receipt)) invalid();
+    if (receipt.state === "active") {
+      if (Object.keys(receipt).sort().join() !== "expires_at,id,revision,state,turns_used" || !/^[a-f0-9]{64}$/.test(receipt.id) ||
+          !Number.isSafeInteger(receipt.revision) || receipt.revision !== turns || receipt.turns_used !== turns || turns < 1 || turns > 3 ||
+          typeof receipt.expires_at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(receipt.expires_at) || !Number.isFinite(Date.parse(receipt.expires_at)) || Date.parse(receipt.expires_at) <= Date.now() ||
+          (previous && (receipt.id !== previous.receipt.id || receipt.expires_at !== previous.receipt.expires_at))) invalid();
+      if (new Date(receipt.expires_at).toISOString().slice(0, 19) !== receipt.expires_at.slice(0, 19)) invalid();
+      const codes = accepted ? neededInputs : previous?.neededInputs || [];
+      if (questions.length !== turns || contextBytes(questions, codes) > 8192) invalid();
+      return { receipt, questions, neededInputs: codes, source: result.source, sourceHash: result.source_hash };
+    }
+    if (receipt.state !== "closed" || Object.keys(receipt).sort().join() !== "reason,state,turns_used" || !Number.isSafeInteger(receipt.turns_used)) invalid();
+    if (receipt.reason === "scope_unavailable") {
+      if (previous || receipt.turns_used !== 0) invalid();
+      return { receipt, questions: [], neededInputs: [], source: result.source, sourceHash: result.source_hash };
+    }
+    if (["expired", "cleared"].includes(receipt.reason)) {
+      if (receipt.turns_used !== priorTurns) invalid();
+      return { receipt, questions: [], neededInputs: [], source: result.source, sourceHash: result.source_hash };
+    }
+    if (!accepted || receipt.turns_used !== turns || turns > 4 ||
+        (receipt.reason === "turn_limit" ? turns !== 4 || contextBytes(questions, neededInputs) > 8192 :
+          receipt.reason !== "byte_limit" || contextBytes(questions, neededInputs) <= 8192)) invalid();
+    return { receipt, questions: receipt.reason === "byte_limit" ? [] : questions, neededInputs: [], source: result.source, sourceHash: result.source_hash };
+  }
+  function acceptAskContext(next) {
+    clearTimeout(askContextTimer);
+    askConversation = next;
+    askContextNotice = "";
+    askContextBlocked = next?.receipt.state === "closed";
+    if (next?.receipt.state === "active") {
+      const expires = Date.parse(next.receipt.expires_at);
+      if (expires <= Date.now()) {
+        forgetAskContext({ blocked: true, notice: "Recent questions expired. Choose New question to restart, or turn off Keep recent questions." });
+      } else {
+        // A local timer is a convenience; the server independently enforces expiry.
+        askContextTimer = setTimeout(() => {
+          if (askPending) {
+            askSequence += 1;
+            askController?.abort();
+            clearTimeout(askTimer);
+            askController = null;
+            askPending = false;
+            $("ask-state").textContent = "Recent questions expired while waiting. No result will be accepted; your draft is kept.";
+          }
+          forgetAskContext({ blocked: true, notice: "Recent questions expired. Choose New question to restart, or turn off Keep recent questions." });
+          updateAskControls();
+        }, Math.min(expires - Date.now(), 600000));
+      }
+    } else if (next?.receipt.reason === "scope_unavailable") {
+      forgetAskContext({ resetChoice: true, notice: "This data source could not support follow-ups. Recent questions are off; include all details in each question." });
+    } else if (next) {
+      askContextNotice = "Recent questions are closed (" + ({ turn_limit: "4-question limit", byte_limit: "text limit", expired: "expired", cleared: "cleared" })[next.receipt.reason] + "). Choose New question to restart, or turn off Keep recent questions.";
+    }
+    renderAskContext();
+  }
   function clearAskAnswer() {
     answerContext += 1;
     clearCatalog();
@@ -216,7 +355,9 @@
     const idle = Boolean(data && !dashboardLoading && !askStatusLoading && !askPending && !catalogPending);
     const ready = idle && askStatus?.enabled;
     $("ask-question").disabled = !ready;
-    $("ask-submit").disabled = !ready || !$("ask-question").value.trim();
+    $("ask-submit").disabled = !ready || !$("ask-question").value.trim() || ($("ask-keep-context").checked && askContextBlocked);
+    $("ask-keep-context").disabled = !data || dashboardLoading || askStatusLoading || !askStatus?.enabled;
+    $("ask-new-question").disabled = !data || dashboardLoading || askStatusLoading || !askStatus?.enabled;
     $("ask-submit").textContent = askPending ? "Working…" : "Ask →";
     $("ask-cancel").classList.toggle("hidden", !askPending);
     $("ask-cancel").disabled = !askPending;
@@ -237,6 +378,7 @@
     $("catalog-availability").textContent = askStatus?.costar_enabled === true ? "Direct catalog search is available, including when AI is disabled." : askStatus ? "The apartment catalog is disabled for this workspace." : "Check availability above to search.";
   }
   function resetAsk() {
+    forgetAskContext({ resetChoice: true });
     askSequence += 1;
     askController?.abort();
     clearTimeout(askTimer);
@@ -263,6 +405,7 @@
       askController?.abort();
       askStatusLoading = false;
       askPending = false;
+      if (!checkingStatus && $("ask-keep-context").checked) forgetAskContext({ blocked: true, notice: "The answer was not confirmed. Choose New question before continuing." });
       $("ask-state").textContent = "";
       if (checkingStatus) $("ask-provider").textContent = "AI availability could not be checked.";
       $("ask-error").textContent = checkingStatus ? "The availability check timed out. Try checking again." : "The answer request timed out. Check the connection before submitting again.";
@@ -299,17 +442,22 @@
     }
   }
   $("ask-check").addEventListener("click", () => void loadAskStatus(true));
+  $("ask-new-question").addEventListener("click", restartAskQuestion);
+  $("ask-keep-context").addEventListener("change", () => {
+    restartAskQuestion();
+  });
   $("ask-question").addEventListener("input", () => { $("ask-error").textContent = ""; updateAskControls(); });
   $("ask-edit-question").addEventListener("click", () => {
     if ($("ask-edit-question").disabled || $("ask-result").classList.contains("hidden")) return;
     $("ask-question").value = $("ask-asked-question").textContent;
     $("ask-error").textContent = "";
-    $("ask-state").textContent = "Add the requested details to your original question, then submit it. Each question starts fresh.";
+    $("ask-state").textContent = $("ask-keep-context").checked && askConversation?.receipt.state === "active" ? "Add the requested details, then submit. Your recent questions will supply context; the answer will read fresh evidence." : "Add the requested details to your original question, then submit it. Each question starts fresh.";
     updateAskControls();
     $("ask-question").focus();
   });
   $("ask-example-spending").addEventListener("click", () => {
     if (!askStatus?.enabled || askPending || catalogPending) return;
+    restartAskQuestion();
     const start = data?.summary.start || "[start date]";
     const end = data?.summary.end || "[end date]";
     $("ask-question").value = "Summarize my observed spending from " + start + " through " + end + " in UTC. Include refunds, exclusions, and missing-history caveats.";
@@ -318,6 +466,7 @@
   });
   $("ask-example-housing").addEventListener("click", () => {
     if (!askStatus?.enabled || !askStatus.costar_enabled || askPending || catalogPending) return;
+    restartAskQuestion();
     $("ask-question").value = "Find up to 3 one-bedroom apartments in TX under $1,800 monthly asking rent. Show each full rent range and recorded availability limitations.";
     updateAskControls();
     $("ask-question").focus();
@@ -376,6 +525,7 @@
     clearTimeout(askTimer);
     askController = null;
     askPending = false;
+    if ($("ask-keep-context").checked) forgetAskContext({ blocked: true, notice: "Stopped waiting and forgot recent questions. Choose New question to restart." });
     $("ask-state").textContent = "Stopped waiting for the answer. The server may still finish this request; no result will be accepted and no retry was sent.";
     $("ask-error").textContent = "";
     updateAskControls();
@@ -529,6 +679,7 @@
     };
     for (const item of result.needed_inputs || []) $("ask-needed-inputs").append(node("li", Object.hasOwn(inputLabels, item) ? inputLabels[item] : item));
     $("ask-clarification").classList.toggle("hidden", result.status !== "clarification");
+    $("ask-clarification-guidance").textContent = $("ask-keep-context").checked && askConversation?.receipt.state === "active" ? "Reply with the missing details. Recent questions provide context; earlier answers are not retained." : "Edit and resubmit the complete question. Earlier questions and answers are not carried into a new request.";
     $("ask-question").setAttribute("aria-describedby", "ask-guidance ask-counter" + (result.status === "clarification" ? " ask-needed-inputs" : ""));
     const sourceName = { fixture: "Synthetic fixture", nessie: "Nessie sandbox" };
     $("ask-source").textContent = "Spending source: " + (Object.hasOwn(sourceName, result.source) ? sourceName[result.source] : result.source) + ". Each tool record shows the dates and filters used.";
@@ -543,34 +694,51 @@
     if (!data || dashboardLoading || !askStatus?.enabled || askStatusLoading || askPending || catalogPending) return;
     const question = $("ask-question").value.trim();
     if (!question || $("ask-question").value.length > 2000) { $("ask-error").textContent = "Enter a question of 1 to 2000 characters."; return; }
+    const contextual = $("ask-keep-context").checked;
+    const previous = askConversation;
+    if (contextual && askContextBlocked) { $("ask-error").textContent = "Choose New question to restart, or turn off Keep recent questions."; return; }
+    if (contextual && previous?.receipt.state === "active" && Date.parse(previous.receipt.expires_at) <= Date.now()) {
+      forgetAskContext({ blocked: true, notice: "Recent questions expired. Choose New question to restart." }); updateAskControls(); return;
+    }
+    if (contextual && ((previous?.questions.length || 0) >= 4 || contextBytes([...(previous?.questions || []), question], previous?.neededInputs || []) > 8192)) {
+      forgetAskContext({ blocked: true, notice: "This question exceeds the recent-question text limit. Choose New question to restart, or turn off Keep recent questions." }); updateAskControls(); return;
+    }
+    const body = { question };
+    if (contextual) body.conversation = previous ? { mode: "continue", id: previous.receipt.id, revision: previous.receipt.revision } : { mode: "new" };
     const requestId = ++askSequence;
     let completionMessage = "";
     askController?.abort();
     askController = new AbortController();
     askPending = true;
     clearAskAnswer();
+    const context = answerContext;
     $("ask-error").textContent = "";
     $("ask-state").textContent = "Reading evidence and preparing an answer…";
     updateAskControls();
     startAskDeadline(requestId, 130000, false);
     try {
-      const response = await fetch("/api/v1/agent/answer", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify({ question }), cache: "no-store", signal: askController.signal });
-      if (requestId !== askSequence) return;
+      const response = await fetch("/api/v1/agent/answer", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify(body), cache: "no-store", redirect: "error", signal: askController.signal });
+      if (requestId !== askSequence || context !== answerContext) return;
       if (response.status === 401) { lock(); $("access-error").textContent = "Your app token was not accepted. Unlock again to continue."; return; }
       if (!response.ok) {
-        $("ask-error").textContent = ({ 429: "An AI request is already running. Wait briefly, then submit again.", 503: "The AI service is unavailable. Check availability before trying again.", 504: "The request reached its time limit. Try a narrower question." })[response.status] || "The backend could not answer this question. Check availability and try again.";
+        if (contextual && response.status !== 429) forgetAskContext({ blocked: true, notice: "The conversation could not continue. Choose New question to restart; your draft is kept." });
+        $("ask-error").textContent = ({ 409: "Recent questions are no longer available. Choose New question and include the needed details.", 429: "An AI request is already running. Wait briefly, then submit again.", 503: "The AI service is unavailable. Check availability before trying again.", 504: "The request reached its time limit. Try a narrower question." })[response.status] || "The backend could not answer this question. Check availability and try again.";
         return;
       }
       const result = await response.json();
-      if (requestId !== askSequence) return;
+      if (requestId !== askSequence || context !== answerContext) return;
       if (!validAskAnswer(result)) throw new Error("invalid answer");
+      const nextContext = contextual ? validatedConversation(result, question, previous) : null;
+      if (!contextual && result.conversation != null) throw new Error("unexpected conversation receipt");
+      if (contextual) acceptAskContext(nextContext);
       renderAskAnswer(result, question);
       completionMessage = { answered: "Answer ready. Review the answer and supporting evidence below.", clarification: "More information is needed. Review the requested inputs and submit a complete question.", limited: "Request limit reached. Review the completed evidence and limits below.", unavailable: "Answer unavailable. Review any returned evidence and limitations below." }[result.status];
     } catch (error) {
-      if (requestId !== askSequence || error.name === "AbortError") return;
+      if (requestId !== askSequence || context !== answerContext || error.name === "AbortError") return;
+      if (contextual) forgetAskContext({ blocked: true, notice: "The answer was not confirmed. Choose New question to restart; your draft is kept." });
       $("ask-error").textContent = "A valid answer could not be received. Check the connection and try again.";
     } finally {
-      if (requestId === askSequence) { clearTimeout(askTimer); askPending = false; $("ask-state").textContent = completionMessage; updateAskControls(); }
+      if (requestId === askSequence && context === answerContext) { clearTimeout(askTimer); askPending = false; $("ask-state").textContent = completionMessage; updateAskControls(); }
     }
   });
 
