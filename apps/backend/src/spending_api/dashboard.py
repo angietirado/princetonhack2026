@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from spending_api.agent_tools import SPENDING_KINDS, SpendingTools
+from spending_api.categories import build_category_mapping
 from spending_api.models import CategoryTotal, DashboardData, DateRange, SpendingMonth
 
 
@@ -45,5 +46,6 @@ def build_dashboard(tools: SpendingTools, window: DateRange) -> DashboardData:
             for month, amount in sorted(months.items())
         ],
         transactions=rows,
+        category_mapping=build_category_mapping(rows),
         recurring=tools.find_recurring_charges(window),
     )

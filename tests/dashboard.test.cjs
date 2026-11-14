@@ -317,6 +317,7 @@ function payload() {
       { id: "t3", account_id: "checking", merchant: "Oak", description: "Return", category: "groceries", kind: "refund", status: "completed", amount_cents: 1000, occurred_at: "2026-11-12T12:00:00Z" },
       { id: "t4", account_id: "credit", merchant: "Cafe", description: "Pending coffee", category: "groceries", kind: "purchase", status: "pending", amount_cents: 3000, occurred_at: "2026-11-11T12:00:00Z" },
     ],
+    category_mapping: { version: "source-categories-v1", entries: [{ raw_category: "groceries", category_id: "groceries", category_label: "Groceries", subcategory_id: null, subcategory_label: null, origin: "source_mapping" }] },
     recurring: [{ merchant: "Cloud", amount_cents: 1200, occurrences: 3, interval_days: 30, confidence: "candidate", transaction_ids: ["a", "b", "c"] }],
   };
 }
@@ -369,6 +370,297 @@ function parseCsv(text) {
   assert.equal(quoted, false);
   return rows;
 }
+
+// These ten records and expected query memberships were specified before the feature.
+function categoryPayload() {
+  const result = payload();
+  result.source = result.summary.source = "fixture";
+  result.customer_id = "category-customer";
+  result.accounts = ["account-a", "account-b"].map((id) => ({ id, customer_id: result.customer_id, nickname: "Checking", type: "Checking", balance_cents: 0 }));
+  result.cash_balance_cents = result.credit_balance_cents = 0;
+  const records = [
+    ["coffee-a", "account-a", "coffee", "Corner Shop", 450, "purchase", "completed"],
+    ["coffee-b", "account-b", "coffee", "Corner Shop", 650, "purchase", "pending"],
+    ["cafe-dining", "account-a", "dining", "Campus Coffee", 700, "purchase", "completed"],
+    ["rent-a", "account-a", "rent", "Property", 150000, "bill_payment", "completed"],
+    ["grocery-a", "account-a", "groceries", "Market", 12050, "purchase", "completed"],
+    ["grocery-refund", "account-a", "groceries", "Market", 2050, "refund", "completed"],
+    ["unknown-zero", "account-a", "__proto__", "Unknown", 0, "fee", "cancelled"],
+    ["transport-a", "account-b", "transport", "Transit", 3000, "purchase", "completed"],
+    ["coffee-trim", "account-a", " coffee ", "Corner Shop", 500, "purchase", "completed"],
+    ["coffee-case", "account-b", "COFFEE", "Corner Shop", 600, "purchase", "completed"],
+  ];
+  result.transactions = records.map(([id, account_id, category, merchant, amount_cents, kind, status]) => ({ id, account_id, category, merchant, merchant_id: "merchant-" + id, amount_cents, kind, status, description: id, occurred_at: "2026-11-01T12:00:00Z" }));
+  const entry = (raw_category, category_id, category_label, subcategory_id = null, subcategory_label = null, origin = "source_mapping") => ({ raw_category, category_id, category_label, subcategory_id, subcategory_label, origin });
+  result.category_mapping = { version: "source-categories-v1", entries: [
+    entry(" coffee ", "dining", "Dining", "coffee", "Coffee"),
+    entry("COFFEE", "dining", "Dining", "coffee", "Coffee"),
+    entry("__proto__", "unclassified", "Unclassified", null, null, "unclassified"),
+    entry("coffee", "dining", "Dining", "coffee", "Coffee"),
+    entry("dining", "dining", "Dining"), entry("groceries", "groceries", "Groceries"),
+    entry("rent", "housing", "Housing", "rent", "Rent"), entry("transport", "transport", "Transport"),
+  ] };
+  result.gross_spending_cents = 167300; result.refunds_cents = 2050;
+  result.summary = { source: "fixture", currency: "USD", start: "2026-11-01", end: "2026-11-01", net_spending_cents: 165250, included_count: 8, excluded_count: 2, categories: [
+    { category: "rent", amount_cents: 150000 }, { category: "groceries", amount_cents: 10000 },
+    { category: "transport", amount_cents: 3000 }, { category: "dining", amount_cents: 700 },
+    { category: "COFFEE", amount_cents: 600 }, { category: " coffee ", amount_cents: 500 }, { category: "coffee", amount_cents: 450 },
+  ] };
+  result.expense_categories = result.summary.categories.map((row) => ({ ...row, amount_cents: row.category === "groceries" ? 12050 : row.amount_cents }));
+  result.monthly_spending = [{ month: "2026-11", net_spending_cents: 165250 }];
+  result.recurring = [];
+  return result;
+}
+
+function input(app, id, value) {
+  app.get(id).value = value;
+  app.get(id).dispatchEvent(new app.window.Event("input", { bubbles: true }));
+}
+function categoryFilters(app, values) {
+  const selects = { category: "transaction-category", subcategory: "transaction-subcategory", account: "transaction-account", kind: "transaction-kind" };
+  for (const [key, value] of Object.entries(values)) {
+    if (selects[key]) app.change(selects[key], value);
+    else if (key === "status") app.document.querySelector('[data-filter="' + value + '"]').click();
+    else input(app, { min: "transaction-min-amount", max: "transaction-max-amount", search: "transaction-search" }[key], value);
+  }
+}
+function visibleCategoryIds(app) {
+  return Array.from(app.get("transaction-rows").querySelectorAll("tr"), (row) => row.querySelector("td:first-child small")?.textContent).filter(Boolean);
+}
+function exportedCategoryIds(app) {
+  app.click("export-transactions");
+  return parseCsv(app.blobs.at(-1).parts.join("")).slice(1).map((row) => row[0]);
+}
+
+test("category filters intersect exact source labels, accounts, kinds, amounts and existing filters", async (t) => {
+  const app = boot(t, () => response(categoryPayload())); await tick();
+  const calls = app.calls.length;
+  const expected = [
+    [{ category: "dining" }, ["coffee-a", "coffee-b", "cafe-dining", "coffee-trim", "coffee-case"]],
+    [{ category: "dining", subcategory: "coffee" }, ["coffee-a", "coffee-b", "coffee-trim", "coffee-case"]],
+    [{ category: "dining", subcategory: "coffee", account: "account-a", status: "completed", min: "4.50", max: "5.00" }, ["coffee-a", "coffee-trim"]],
+    [{ category: "groceries", kind: "refund" }, ["grocery-refund"]],
+    [{ min: "0", max: "0" }, ["unknown-zero"]],
+    [{ status: "other", min: "0", max: "0" }, ["unknown-zero"]],
+    [{ account: "account-b", status: "completed", min: "6.00", max: "30.00" }, ["transport-a", "coffee-case"]],
+    [{ search: "coffee" }, ["coffee-a", "coffee-b", "cafe-dining", "coffee-trim", "coffee-case"]],
+    [{ category: "unclassified" }, ["unknown-zero"]],
+  ];
+  for (const [filters, ids] of expected) {
+    app.click("transaction-reset-filters"); categoryFilters(app, filters);
+    assert.deepEqual(visibleCategoryIds(app), ids, JSON.stringify(filters));
+    assert.deepEqual(exportedCategoryIds(app), ids, "CSV " + JSON.stringify(filters));
+    assert.equal(app.get("spend-value").textContent, "$1,652.50");
+    assert.equal(app.get("report-total").textContent, "$1,652.50");
+  }
+  assert.equal(app.calls.length, calls, "table filters do not fetch or change the dashboard period");
+  for (const id of ["transaction-category", "transaction-subcategory", "transaction-account", "transaction-kind", "transaction-min-amount", "transaction-max-amount"]) {
+    assert.ok(app.document.querySelector('label[for="' + id + '"]') || app.get(id).closest("label"), id + " has a visible label");
+  }
+  const accountLabels = Array.from(app.get("transaction-account").options, (option) => option.textContent).join(" ");
+  assert.match(accountLabels, /Checking.*account-a/); assert.match(accountLabels, /Checking.*account-b/);
+});
+
+test("broad-only classifications remain distinct from explicit detail and source labels survive CSV", async (t) => {
+  const app = boot(t, () => response(categoryPayload())); await tick();
+  categoryFilters(app, { category: "dining", subcategory: "__none__" });
+  assert.deepEqual(visibleCategoryIds(app), ["cafe-dining"]);
+  app.click("export-transactions");
+  const row = parseCsv(app.blobs.at(-1).parts.join(""))[1];
+  assert.equal(row[3], "Campus Coffee"); assert.equal(row[5], "dining");
+  assert.deepEqual(row.slice(10), ["Dining", "", "source_mapping", "source-categories-v1"]);
+  app.change("transaction-subcategory", "coffee"); app.change("transaction-category", "housing");
+  assert.equal(app.get("transaction-subcategory").value, "");
+  assert.deepEqual(visibleCategoryIds(app), ["rent-a"]);
+  app.change("transaction-category", "dining"); app.change("transaction-subcategory", "__none__");
+  app.change("transaction-category", "housing");
+  assert.equal(app.get("transaction-subcategory").value, "__none__");
+  assert.deepEqual(visibleCategoryIds(app), []);
+  app.click("transaction-reset-filters"); categoryFilters(app, { search: "coffee-trim" });
+  app.click("export-transactions");
+  const trimmed = parseCsv(app.blobs.at(-1).parts.join(""))[1];
+  assert.equal(trimmed[5], " coffee ");
+  assert.deepEqual(trimmed.slice(10), ["Dining", "Coffee", "source_mapping", "source-categories-v1"]);
+});
+
+test("USD bounds are exact cents and invalid input never exports misleading matches", async (t) => {
+  const result = categoryPayload();
+  result.transactions[0].amount_cents = 29;
+  result.gross_spending_cents -= 421; result.summary.net_spending_cents -= 421;
+  result.monthly_spending[0].net_spending_cents -= 421;
+  result.summary.categories.find((row) => row.category === "coffee").amount_cents = 29;
+  result.expense_categories.find((row) => row.category === "coffee").amount_cents = 29;
+  const app = boot(t, () => response(result)); await tick();
+  categoryFilters(app, { min: "0.29", max: "0.29" });
+  assert.deepEqual(visibleCategoryIds(app), ["coffee-a"]);
+  assert.deepEqual(exportedCategoryIds(app), ["coffee-a"]);
+  for (const [minimum, maximum] of [["-1", ""], ["1e3", ""], ["NaN", ""], ["Infinity", ""], ["12.345", ""], ["12.", ""], ["90071992547409.92", ""], ["5.01", "5.00"]]) {
+    categoryFilters(app, { min: minimum, max: maximum });
+    assert.ok(app.get("transaction-filter-error").textContent.trim(), minimum);
+    assert.deepEqual(visibleCategoryIds(app), []);
+    assert.equal(app.get("export-transactions").disabled, true);
+    const before = app.blobs.length; app.click("export-transactions"); assert.equal(app.blobs.length, before);
+  }
+  categoryFilters(app, { min: "0", max: "90071992547409.91" });
+  assert.equal(app.get("transaction-filter-error").textContent, "");
+  assert.equal(visibleCategoryIds(app).length, 10);
+  for (const maximum of ["12", "12.3", "12.34"]) {
+    categoryFilters(app, { min: "", max: maximum });
+    assert.equal(app.get("transaction-filter-error").textContent, "");
+  }
+});
+
+test("new filters reset pagination and export every matching row beyond the current page", async (t) => {
+  const result = categoryPayload();
+  const extra = Array.from({ length: 27 }, (_, index) => ({ ...result.transactions[0], id: "bulk-" + index, description: "bulk-" + index }));
+  result.transactions.push(...extra);
+  result.gross_spending_cents += 12150; result.summary.net_spending_cents += 12150; result.summary.included_count += 27;
+  result.monthly_spending[0].net_spending_cents += 12150;
+  result.summary.categories.find((row) => row.category === "coffee").amount_cents += 12150;
+  result.expense_categories.find((row) => row.category === "coffee").amount_cents += 12150;
+  const app = boot(t, () => response(result)); await tick();
+  categoryFilters(app, { category: "dining", subcategory: "coffee" });
+  assert.equal(visibleCategoryIds(app).length, 25);
+  app.click("next-page"); assert.equal(visibleCategoryIds(app).length, 6);
+  const ids = ["coffee-a", "coffee-b", "coffee-trim", "coffee-case", ...extra.map((row) => row.id)];
+  assert.deepEqual(exportedCategoryIds(app), ids);
+  assert.equal(new Set(ids).size, 31);
+  app.change("transaction-account", "account-a");
+  assert.match(app.get("page-count").textContent, /Page 1 of 2/);
+  assert.deepEqual(exportedCategoryIds(app), ["coffee-a", "coffee-trim", ...extra.map((row) => row.id)]);
+});
+
+test("date refresh retains unavailable selections and reset changes only table filters", async (t) => {
+  let result = categoryPayload();
+  const app = boot(t, () => response(result)); await tick();
+  categoryFilters(app, { category: "dining", subcategory: "coffee", account: "account-b", kind: "purchase" });
+  const rent = result.transactions.find((row) => row.id === "rent-a");
+  result = { ...result, accounts: [result.accounts[0]], transactions: [rent], category_mapping: { version: "source-categories-v1", entries: [result.category_mapping.entries.find((row) => row.raw_category === "rent")] } };
+  result.summary = { ...result.summary, net_spending_cents: 150000, included_count: 1, excluded_count: 0, categories: [{ category: "rent", amount_cents: 150000 }] };
+  result.gross_spending_cents = 150000; result.refunds_cents = 0;
+  result.expense_categories = [{ category: "rent", amount_cents: 150000 }]; result.monthly_spending = [{ month: "2026-11", net_spending_cents: 150000 }];
+  app.change("date-button", "month"); await tick();
+  for (const [id, value] of [["transaction-category", "dining"], ["transaction-subcategory", "coffee"], ["transaction-account", "account-b"], ["transaction-kind", "purchase"]]) {
+    assert.equal(app.get(id).value, value);
+    assert.match(app.get(id).selectedOptions[0].textContent, /not in this period/);
+  }
+  assert.deepEqual(visibleCategoryIds(app), []); assert.equal(app.get("export-transactions").disabled, true);
+  const callCount = app.calls.length, dateValue = app.get("date-button").value;
+  app.click("transaction-reset-filters");
+  assert.equal(app.get("date-button").value, dateValue); assert.equal(app.calls.length, callCount);
+  assert.deepEqual(visibleCategoryIds(app), ["rent-a"]);
+  assert.equal(app.document.querySelector('[data-filter="all"]').getAttribute("aria-pressed"), "true");
+});
+
+test("lock clears category metadata, private filter options and entered amount/search text", async (t) => {
+  const app = boot(t, () => response(categoryPayload())); await tick();
+  categoryFilters(app, { category: "dining", subcategory: "coffee", account: "account-a", kind: "purchase", min: "4.50", max: "5.00", search: "coffee" });
+  app.click("lock-button");
+  for (const id of ["transaction-category", "transaction-subcategory", "transaction-account", "transaction-kind", "transaction-min-amount", "transaction-max-amount", "transaction-search"]) assert.equal(app.get(id).value, "");
+  assert.doesNotMatch(app.get("transaction-account").textContent, /account-a|account-b/);
+  assert.equal(app.get("transaction-rows").textContent, "");
+});
+
+test("invalid or incomplete category metadata fails closed rather than inventing labels", async (t) => {
+  let result = categoryPayload();
+  const app = boot(t, () => response(result)); await tick();
+  const malformed = [
+    (r) => { delete r.category_mapping; },
+    (r) => { r.category_mapping.version = "future-version"; },
+    (r) => { r.category_mapping.entries.push({ ...r.category_mapping.entries[0] }); },
+    (r) => { r.category_mapping.entries = r.category_mapping.entries.filter((row) => row.raw_category !== "COFFEE"); },
+    (r) => { r.category_mapping.entries[0].subcategory_label = null; },
+    (r) => { r.category_mapping.entries[0].origin = "guessed"; },
+    (r) => { r.category_mapping.entries[0].category_label = "Conflicting label"; },
+    (r) => { r.category_mapping.entries[0].category_id = "housing"; r.category_mapping.entries[0].category_label = "Housing"; },
+    (r) => { r.category_mapping.entries.find((row) => row.origin === "unclassified").origin = "source_mapping"; },
+  ];
+  for (const mutate of malformed) {
+    result = categoryPayload(); mutate(result); app.click("refresh-button"); await tick();
+    assert.equal(app.get("dashboard-data").classList.contains("hidden"), true);
+    assert.equal(app.get("status-banner").classList.contains("error"), true);
+    assert.equal(app.get("transaction-rows").textContent, "");
+    assert.equal(app.get("transaction-category").value, "");
+  }
+});
+
+test("hostile raw category strings remain text and formula-neutralized CSV cells", async (t) => {
+  const result = categoryPayload();
+  const hostile = ['<img src=x onerror="alert(1)">', "=CATEGORY()"];
+  result.transactions = hostile.map((category, index) => ({ ...result.transactions[0], id: "hostile-" + index, description: "hostile-" + index, category }));
+  result.category_mapping.entries = hostile.map((raw_category) => ({ raw_category, category_id: "unclassified", category_label: "Unclassified", subcategory_id: null, subcategory_label: null, origin: "unclassified" }));
+  result.gross_spending_cents = 900; result.refunds_cents = 0;
+  result.summary = { ...result.summary, net_spending_cents: 900, included_count: 2, excluded_count: 0, categories: hostile.map((category) => ({ category, amount_cents: 450 })) };
+  result.expense_categories = result.summary.categories.map((row) => ({ ...row }));
+  result.monthly_spending = [{ month: "2026-11", net_spending_cents: 900 }];
+  const app = boot(t, () => response(result)); await tick();
+  categoryFilters(app, { category: "unclassified" });
+  assert.equal(app.get("transaction-rows").querySelector("img"), null);
+  assert.match(app.get("transaction-rows").textContent, /<img src=x/);
+  app.click("export-transactions");
+  const rows = parseCsv(app.blobs.at(-1).parts.join(""));
+  assert.equal(rows[1][5], hostile[0]); assert.equal(rows[2][5], "'=CATEGORY()");
+  assert.deepEqual(rows[1].slice(10), ["Unclassified", "", "unclassified", "source-categories-v1"]);
+});
+
+test("money displays exact cents across safe integer boundaries and sub-dollar signs", async (t) => {
+  const cases = [
+    [29, "$0.29", "$0.29"], [-29, "-$0.29", "$0.29"],
+    [9007199254740991, "$90,071,992,547,409.91", "$90,071,992,547,409.91"],
+    [-9007199254740991, "-$90,071,992,547,409.91", "$90,071,992,547,409.91"],
+    [9007199254740989, "$90,071,992,547,409.89", "$90,071,992,547,409.89"],
+    [1, "$0.01", "$0.01"], [-1, "-$0.01", "$0.01"], [0, "$0.00", "$0.00"],
+  ];
+  let amount = cases[0][0];
+  const app = boot(t, () => {
+    const result = payload();
+    result.transactions = [{ ...result.transactions[0], amount_cents: Math.abs(amount), kind: amount < 0 ? "refund" : "purchase" }];
+    result.summary = { ...result.summary, net_spending_cents: amount, included_count: 1, excluded_count: 0, categories: [{ category: "groceries", amount_cents: amount }] };
+    result.gross_spending_cents = Math.max(0, amount); result.refunds_cents = Math.max(0, -amount);
+    result.expense_categories = amount > 0 ? [{ category: "groceries", amount_cents: amount }] : [];
+    result.monthly_spending = [{ month: "2026-11", net_spending_cents: amount }];
+    result.recurring = [];
+    return response(result);
+  });
+  await tick();
+  for (const [cents, signed, unsigned] of cases) {
+    amount = cents; app.click("refresh-button"); await tick();
+    assert.equal(app.get("spend-value").textContent, signed, "net cents=" + cents);
+    assert.equal(app.get("report-total").textContent, signed, "report cents=" + cents);
+    assert.equal(app.get("transaction-rows").querySelector("td.amount").textContent, unsigned, "face amount cents=" + cents);
+  }
+});
+
+test("comparison displays exact basis points for accepted safe-integer boundary payloads", async (t) => {
+  const cases = [
+    [9007199254740990, "90071992547309.90%"],
+    [-9007199254730990, "-90071992547409.90%"],
+    [10000, "0.00%"], [10001, "0.01%"], [9999, "-0.01%"],
+  ];
+  let current = cases[0][0];
+  const app = boot(t, (url) => {
+    if (url !== "/api/v1/spending/compare") return response(payload());
+    const value = comparisonResponse();
+    const total = { baseline_cents: 10000, current_cents: current, delta_cents: current - 10000, percent_change_bps: current - 10000, percent_status: "defined" };
+    value.total = total;
+    for (const [period, amount] of [["baseline", 10000], ["current", current]]) {
+      Object.assign(value[period], { gross_spending_cents: Math.max(0, amount), refunds_cents: Math.max(0, -amount), net_spending_cents: amount, observed_count: 1, included_count: 1, excluded_count: 0 });
+    }
+    for (const key of ["categories", "merchants"]) Object.assign(value[key].rows[0], total);
+    value.transaction_evidence = [["baseline", 10000], ["current", current]].map(([period, amount]) => ({ id: period + "-synthetic", period, occurred_at: value[period].start + "T12:00:00Z", category_key: value.categories.rows[0].key, merchant_key: value.merchants.rows[0].key, signed_spending_cents: amount }));
+    value.evidence_summary = { eligible_count: 2, returned_count: 2, omitted_count: 0, baseline_returned: 1, current_returned: 1, truncated: false };
+    value.findings = [];
+    return response(value);
+  });
+  await tick(); fillComparison(app);
+  for (const [amount, expected] of cases) {
+    current = amount;
+    app.submit("comparison-form"); await tick();
+    assert.equal(app.get("comparison-result").classList.contains("hidden"), false, "complete coherent comparison is accepted");
+    assert.equal(app.get("comparison-error").textContent, "");
+    assert.equal(app.get("comparison-totals").querySelector("p.chart-note").textContent, "Total change: " + expected + ".");
+  }
+});
 
 test("one API payload drives balances, charts, insights, and reports without prototype figures", async (t) => {
   const app = boot(t);
@@ -425,7 +717,7 @@ test("custom dates go to the API and an empty period clears historical figures",
     const result = payload();
     if (url.includes("2030")) {
       result.summary = { ...result.summary, start: "2030-01-01", end: "2030-01-31", net_spending_cents: 0, included_count: 0, excluded_count: 0, categories: [] };
-      Object.assign(result, { gross_spending_cents: 0, refunds_cents: 0, transactions: [], expense_categories: [], monthly_spending: [], recurring: [] });
+      Object.assign(result, { gross_spending_cents: 0, refunds_cents: 0, transactions: [], expense_categories: [], monthly_spending: [], recurring: [], category_mapping: { version: "source-categories-v1", entries: [] } });
     }
     return response(result);
   });

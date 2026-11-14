@@ -1,14 +1,29 @@
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const money = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+  const currencyFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+  const money = (cents) => {
+    if (!Number.isSafeInteger(cents)) return "Unavailable";
+    const exact = BigInt(cents);
+    const magnitude = exact < 0n ? -exact : exact;
+    const fraction = (magnitude % 100n).toString().padStart(2, "0");
+    const formatted = currencyFormat.formatToParts(magnitude / 100n).map((part) => part.type === "fraction" ? fraction : part.value).join("");
+    return exact < 0n ? "-" + formatted : formatted;
+  };
   const shortMoney = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(cents / 100);
+  const percentFromBps = (bps) => {
+    if (!Number.isSafeInteger(bps)) return "Unavailable";
+    const exact = BigInt(bps);
+    const magnitude = exact < 0n ? -exact : exact;
+    return (exact < 0n ? "-" : "") + (magnitude / 100n).toString() + "." + (magnitude % 100n).toString().padStart(2, "0") + "%";
+  };
   const label = (value) => String(value).replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
   const dateLabel = (value) => value ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(value.slice(0, 10) + "T00:00:00Z")) : "No activity";
   const colors = ["#8e74e8", "#f2a65a", "#6ca4e5", "#79bfa8", "#d898ad", "#bcc8c0"];
   const pageSize = 25;
   let token = "";
   let data = null;
+  let categoryMappings = new Map();
   let statusFilter = "all";
   let page = 0;
   let range = {};
@@ -72,6 +87,8 @@
   });
   function clearData() {
     data = null;
+    categoryMappings = new Map();
+    resetTransactionFilters();
     resetAsk();
     resetComparison(true);
     $("dashboard-data").classList.add("hidden");
@@ -105,6 +122,7 @@
   async function refresh() {
     const requestId = ++sequence;
     dashboardLoading = true;
+    updateTransactionFilterAvailability();
     resetAsk();
     resetComparison();
     controller?.abort();
@@ -138,7 +156,10 @@
           !["accounts", "transactions", "monthly_spending", "expense_categories", "recurring"].every((key) => Array.isArray(payload[key]))) {
         throw new Error("The backend returned an unexpected response. Check that both services are up to date.");
       }
+      const mappings = validateCategoryMapping(payload);
+      if (!mappings) throw new Error("The backend returned unsupported transaction categories. Update both services, then refresh.");
       data = payload;
+      categoryMappings = mappings;
       updateAskControls();
       page = 0;
       $("dashboard-data").classList.remove("hidden");
@@ -158,6 +179,7 @@
     } finally {
       if (requestId === sequence) {
         dashboardLoading = false;
+        updateTransactionFilterAvailability();
         updateAskControls();
         $("refresh-button").disabled = false;
         $("unlock-button").disabled = false;
@@ -640,7 +662,7 @@
       card.append(node("p", title), node("strong", money(value)));
       $("comparison-totals").append(card);
     }
-    const percent = total.percent_status === "defined" ? "Total change: " + (total.percent_change_bps / 100).toFixed(2) + "%." : "A percentage change is undefined because the earlier net total is " + (total.percent_status === "zero_baseline" ? "zero." : "negative.");
+    const percent = total.percent_status === "defined" ? "Total change: " + percentFromBps(total.percent_change_bps) + "." : "A percentage change is undefined because the earlier net total is " + (total.percent_status === "zero_baseline" ? "zero." : "negative.");
     $("comparison-totals").append(node("p", percent, "chart-note"));
     for (const finding of result.findings) $("comparison-findings").append(node("li", finding.text));
     for (const key of ["categories", "merchants"]) {
@@ -788,17 +810,123 @@
     });
     if (!data.transactions.length) host.append(node("p", "No transactions in this period.", "empty-state"));
   }
+  function validateCategoryMapping(payload) {
+    const mapping = payload.category_mapping;
+    if (!object(mapping) || mapping.version !== "source-categories-v1" || !Array.isArray(mapping.entries)) return null;
+    if (!payload.transactions.every((row) => object(row) && typeof row.category === "string" && Number.isSafeInteger(row.amount_cents) && row.amount_cents >= 0)) return null;
+    const rawCategories = new Set(payload.transactions.map((row) => row.category));
+    if (mapping.entries.length !== rawCategories.size) return null;
+    const result = new Map(), categories = new Map(), details = new Map();
+    const validId = (value) => typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(value);
+    const validLabel = (value) => typeof value === "string" && value.trim().length > 0 && value.length <= 100;
+    for (const entry of mapping.entries) {
+      if (!object(entry) || !rawCategories.has(entry.raw_category) || result.has(entry.raw_category) || !validId(entry.category_id) || !validLabel(entry.category_label) || !["source_mapping", "unclassified"].includes(entry.origin)) return null;
+      const noDetail = entry.subcategory_id === null && entry.subcategory_label === null;
+      if (!noDetail && !(validId(entry.subcategory_id) && validLabel(entry.subcategory_label))) return null;
+      if (entry.origin === "unclassified" && (entry.category_id !== "unclassified" || entry.category_label !== "Unclassified" || !noDetail)) return null;
+      if (entry.origin === "source_mapping" && entry.category_id === "unclassified") return null;
+      if (categories.has(entry.category_id) && categories.get(entry.category_id) !== entry.category_label) return null;
+      categories.set(entry.category_id, entry.category_label);
+      if (!noDetail) {
+        const identity = JSON.stringify([entry.category_id, entry.subcategory_label]);
+        if (details.has(entry.subcategory_id) && details.get(entry.subcategory_id) !== identity) return null;
+        details.set(entry.subcategory_id, identity);
+      }
+      result.set(entry.raw_category, entry);
+    }
+    return result;
+  }
+  function transactionAmountBounds() {
+    const parse = (input) => {
+      const text = input.trim();
+      if (!text) return { value: null, invalid: false };
+      if (text.length > 20 || !/^\d+(?:\.\d{1,2})?$/.test(text)) return { invalid: true };
+      const [whole, fraction = ""] = text.split(".");
+      const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0"));
+      return cents <= BigInt(Number.MAX_SAFE_INTEGER) ? { value: Number(cents), invalid: false } : { invalid: true };
+    };
+    const minimum = parse($("transaction-min-amount").value);
+    const maximum = parse($("transaction-max-amount").value);
+    const reversed = !minimum.invalid && !maximum.invalid && minimum.value !== null && maximum.value !== null && minimum.value > maximum.value;
+    return {
+      minimum: minimum.value, maximum: maximum.value,
+      invalidMinimum: minimum.invalid || reversed, invalidMaximum: maximum.invalid || reversed,
+      error: minimum.invalid || maximum.invalid ? "Enter positive or zero USD amounts with at most two decimal places, within the supported cent range." : reversed ? "The minimum amount must not exceed the maximum amount." : "",
+    };
+  }
+  function setFilterOptions(id, choices, allLabel, extraChoices = []) {
+    const select = $(id);
+    const selected = select.value;
+    const previousLabel = select.selectedOptions[0]?.textContent.replace(/ \(not in this period\)$/, "") || selected;
+    const options = [["", allLabel], ...extraChoices, ...choices];
+    if (selected && !options.some(([value]) => value === selected)) options.push([selected, previousLabel + " (not in this period)"]);
+    select.replaceChildren(...options.map(([value, text]) => {
+      const option = node("option", text);
+      option.value = value;
+      return option;
+    }));
+    select.value = selected;
+  }
+  function updateTransactionFilterOptions() {
+    const categories = new Map(), details = new Map();
+    const selectedCategory = $("transaction-category").value;
+    for (const entry of categoryMappings.values()) {
+      categories.set(entry.category_id, entry.category_label);
+      if (entry.subcategory_id && (!selectedCategory || selectedCategory === entry.category_id)) details.set(entry.subcategory_id, entry.subcategory_label);
+    }
+    const ordered = (map) => [...map].sort((left, right) => left[1].localeCompare(right[1], "en") || left[0].localeCompare(right[0], "en"));
+    setFilterOptions("transaction-category", ordered(categories), "All categories");
+    setFilterOptions("transaction-subcategory", ordered(details), "All subcategories", [["__none__", "No detail supplied"]]);
+    const accounts = new Map((data?.accounts || []).map((row) => [row.id, row.nickname + " · " + row.id]));
+    setFilterOptions("transaction-account", ordered(accounts), "All accounts");
+    const kinds = new Map((data?.transactions || []).map((row) => [row.kind, label(row.kind)]));
+    setFilterOptions("transaction-kind", ordered(kinds), "All types");
+    updateTransactionFilterAvailability();
+  }
+  function updateTransactionFilterAvailability() {
+    const ready = Boolean(data) && !dashboardLoading;
+    for (const id of ["transaction-category", "transaction-subcategory", "transaction-account", "transaction-kind", "transaction-min-amount", "transaction-max-amount", "transaction-search", "transaction-reset-filters"]) $(id).disabled = !ready;
+    document.querySelectorAll(".tab[data-filter]").forEach((tab) => { tab.disabled = !ready; });
+    $("export-transactions").disabled = !ready || !filteredTransactions().length;
+  }
+  function resetTransactionFilters() {
+    statusFilter = "all";
+    page = 0;
+    for (const id of ["transaction-category", "transaction-subcategory", "transaction-account", "transaction-kind", "transaction-min-amount", "transaction-max-amount", "transaction-search"]) $(id).value = "";
+    document.querySelectorAll(".tab[data-filter]").forEach((tab) => {
+      const active = tab.dataset.filter === "all";
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-pressed", String(active));
+    });
+    $("transaction-filter-error").textContent = "";
+    $("transaction-filter-error").classList.add("hidden");
+    for (const id of ["transaction-min-amount", "transaction-max-amount"]) $(id).removeAttribute("aria-invalid");
+    updateTransactionFilterOptions();
+    if (data) renderTransactions();
+  }
   function filteredTransactions() {
     if (!data) return [];
+    const bounds = transactionAmountBounds();
+    if (bounds.error) return [];
     const search = $("transaction-search").value.trim().toLowerCase();
+    const category = $("transaction-category").value, detail = $("transaction-subcategory").value;
+    const account = $("transaction-account").value, kind = $("transaction-kind").value;
     return data.transactions.filter((row) => {
+      const classification = categoryMappings.get(row.category);
+      if (!classification) return false;
       const statusMatches = statusFilter === "all" || (statusFilter === "other" ? !["completed", "pending"].includes(row.status) : row.status === statusFilter);
-      const text = [row.merchant, row.description, row.category, label(row.kind), row.id].join(" ").toLowerCase();
-      return statusMatches && (!search || text.includes(search));
+      const detailMatches = !detail || (detail === "__none__" ? classification.subcategory_id === null : classification.subcategory_id === detail);
+      const text = [row.merchant, row.description, row.category, classification.category_label, classification.subcategory_label || "", label(row.kind), row.id].join(" ").toLowerCase();
+      return statusMatches && (!category || classification.category_id === category) && detailMatches && (!account || row.account_id === account) && (!kind || row.kind === kind) && (bounds.minimum === null || row.amount_cents >= bounds.minimum) && (bounds.maximum === null || row.amount_cents <= bounds.maximum) && (!search || text.includes(search));
     });
   }
   function renderTransactions() {
     if (!data) return;
+    const bounds = transactionAmountBounds();
+    $("transaction-filter-error").textContent = bounds.error;
+    $("transaction-filter-error").classList.toggle("hidden", !bounds.error);
+    $("transaction-min-amount").setAttribute("aria-invalid", String(bounds.invalidMinimum));
+    $("transaction-max-amount").setAttribute("aria-invalid", String(bounds.invalidMaximum));
     const rows = filteredTransactions();
     const pageTotal = Math.max(1, Math.ceil(rows.length / pageSize));
     page = Math.min(page, pageTotal - 1);
@@ -812,23 +940,27 @@
       const amount = node("td", money(tx.amount_cents), "amount");
       const status = node("td");
       status.append(statusBadge(tx.status), node("small", label(tx.kind)));
-      row.append(merchant, node("td", dateLabel(tx.occurred_at)), node("td", label(tx.category)), amount, status);
+      const classification = categoryMappings.get(tx.category);
+      const category = node("td", undefined, "transaction-category-cell");
+      category.append(node("strong", classification.category_label), node("small", classification.subcategory_label || "No detail supplied"), node("small", "Source: " + tx.category, "source-category"));
+      row.append(merchant, node("td", dateLabel(tx.occurred_at)), category, amount, status);
       host.append(row);
     });
     if (!rows.length) {
-      const cell = node("td", data.transactions.length ? "No transactions match these filters." : "No transactions in this period.", "empty-state");
+      const cell = node("td", bounds.error ? "Correct the amount range to see matching transactions." : data.transactions.length ? "No transactions match these filters." : "No transactions in this period.", "empty-state");
       cell.colSpan = 5;
       const row = node("tr");
       row.append(cell);
       host.append(row);
     }
-    $("transaction-count").textContent = rows.length + " matching transactions · " + data.transactions.length + " in this period";
+    $("transaction-count").textContent = bounds.error ? "Amount filter needs correction · " + data.transactions.length + " transactions in this period" : rows.length + " matching transactions · " + data.transactions.length + " in this period";
     $("page-count").textContent = "Page " + (page + 1) + " of " + pageTotal;
     $("previous-page").disabled = page === 0;
     $("next-page").disabled = page + 1 >= pageTotal;
     $("export-transactions").disabled = !rows.length;
   }
   document.querySelectorAll(".tab[data-filter]").forEach((tab) => tab.addEventListener("click", () => {
+    if (!data || dashboardLoading) return;
     statusFilter = tab.dataset.filter;
     page = 0;
     document.querySelectorAll(".tab[data-filter]").forEach((item) => {
@@ -838,7 +970,22 @@
     });
     renderTransactions();
   }));
-  $("transaction-search").addEventListener("input", () => { page = 0; renderTransactions(); });
+  function transactionFilterChanged() {
+    if (!data || dashboardLoading) return;
+    page = 0;
+    renderTransactions();
+  }
+  $("transaction-category").addEventListener("change", () => {
+    if (!data || dashboardLoading) return;
+    const category = $("transaction-category").value;
+    const detail = $("transaction-subcategory").value;
+    if (category && detail && detail !== "__none__" && ![...categoryMappings.values()].some((entry) => entry.category_id === category && entry.subcategory_id === detail)) $("transaction-subcategory").value = "";
+    updateTransactionFilterOptions();
+    transactionFilterChanged();
+  });
+  for (const id of ["transaction-subcategory", "transaction-account", "transaction-kind"]) $(id).addEventListener("change", transactionFilterChanged);
+  for (const id of ["transaction-search", "transaction-min-amount", "transaction-max-amount"]) $(id).addEventListener("input", transactionFilterChanged);
+  $("transaction-reset-filters").addEventListener("click", () => { if (data && !dashboardLoading) resetTransactionFilters(); });
   $("previous-page").addEventListener("click", () => { page = Math.max(0, page - 1); renderTransactions(); });
   $("next-page").addEventListener("click", () => { page += 1; renderTransactions(); });
 
@@ -868,6 +1015,7 @@
     renderCategories();
     renderMonths();
     renderActivity();
+    updateTransactionFilterOptions();
     renderTransactions();
     $("coverage-details").replaceChildren(
       amountRow("Completed expenses", money(data.gross_spending_cents)),
@@ -972,10 +1120,15 @@
     ], "ledgerly-spending-" + (data.summary.end || "empty") + ".csv");
   });
   $("export-transactions").addEventListener("click", () => {
-    if (!data) return;
+    if (!data || dashboardLoading) return;
+    const rows = filteredTransactions();
+    if (!rows.length) return;
     download([
-      ["ID", "Account", "Date (UTC)", "Merchant", "Description", "Category", "Type", "Status", "Amount (cents)", "Currency"],
-      ...filteredTransactions().map((row) => [row.id, row.account_id, row.occurred_at, row.merchant, row.description, row.category, row.kind, row.status, row.amount_cents, "USD"]),
+      ["ID", "Account", "Date (UTC)", "Merchant", "Description", "Category", "Type", "Status", "Amount (cents)", "Currency", "Broad category", "Subcategory", "Classification origin", "Classification version"],
+      ...rows.map((row) => {
+        const classification = categoryMappings.get(row.category);
+        return [row.id, row.account_id, row.occurred_at, row.merchant, row.description, row.category, row.kind, row.status, row.amount_cents, "USD", classification.category_label, classification.subcategory_label || "", classification.origin, data.category_mapping.version];
+      }),
     ], "ledgerly-transactions-" + (data.summary.end || "empty") + ".csv");
   });
   void refresh();

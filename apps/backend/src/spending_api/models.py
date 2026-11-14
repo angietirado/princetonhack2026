@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -68,6 +68,20 @@ class SpendingMonth(BaseModel):
     net_spending_cents: int
 
 
+class CategoryMappingEntry(BaseModel):
+    raw_category: str
+    category_id: str
+    category_label: str
+    subcategory_id: str | None = None
+    subcategory_label: str | None = None
+    origin: Literal["source_mapping", "unclassified"]
+
+
+class CategoryMapping(BaseModel):
+    version: Literal["source-categories-v1"] = "source-categories-v1"
+    entries: list[CategoryMappingEntry]
+
+
 class DashboardData(BaseModel):
     source: str
     customer_id: str | None
@@ -81,4 +95,5 @@ class DashboardData(BaseModel):
     expense_categories: list[CategoryTotal]
     monthly_spending: list[SpendingMonth]
     transactions: list[Transaction]
+    category_mapping: CategoryMapping
     recurring: list[RecurringCharge]

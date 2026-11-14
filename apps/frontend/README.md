@@ -22,9 +22,13 @@ docker compose --env-file .env.example --profile tools run --build --rm dashboar
 
 Use `http://127.0.0.1:8765/docs` or `/openapi.json` for the authoritative schema. The React scaffold's typed client is `src/api.ts`; it is not currently used by the root dashboard.
 
+`category_mapping` has version `source-categories-v1` and one entry for every exact raw category in the returned transactions. Each entry supplies `raw_category`, broad `category_id`/`category_label`, nullable `subcategory_id`/`subcategory_label`, and `origin` (`source_mapping` or `unclassified`). The dashboard validates complete, unique mapping entries before rendering and indexes raw keys with a `Map`. Unknown source categories are explicit Unclassified entries. No merchant-name inference or banking-data mutation is involved.
+
+List filters operate on the already loaded date-scoped rows. USD bounds parse to exact safe integer cents, and CSV exports all matching pages with raw labels and mapping provenance. Invalid bounds disable export. A date refresh preserves unavailable selections as zero-match filters; lock/error clearing removes values and private options. The summary and comparison APIs continue using original source categories.
+
 | Route | Returns |
 | --- | --- |
-| `/api/v1/dashboard` | One scoped snapshot: accounts, cash/card balances, summary, gross expenses, refunds, expense categories, monthly net spending, transactions, recurring candidates, source, customer ID, and retrieval time |
+| `/api/v1/dashboard` | One scoped snapshot: accounts, cash/card balances, summary, gross expenses, refunds, expense categories, monthly net spending, transactions, versioned source category mapping, recurring candidates, source, customer ID, and retrieval time |
 | `/api/v1/accounts` | Array of `{ id, customer_id, nickname, type, balance_cents }` |
 | `/api/v1/transactions` | Array with account, merchant/category, amount, kind, status, and timestamp |
 | `/api/v1/spending/summary` | `{ source, currency, start, end, net_spending_cents, included_count, excluded_count, categories }` |

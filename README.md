@@ -208,6 +208,10 @@ All amounts are calculated in cents. The category donut shows completed expenses
 
 Docker is sufficient for running and checking the dashboard. [Optional native development](docs/LOCAL_DEVELOPMENT.md) is available for working on the Python and React scaffolds without containers.
 
+The transaction list separates broad categories from finer source labels, while keeping the recorded category visible. An explicit `coffee` category becomes Dining / Coffee; a merchant named Campus Coffee whose category is `dining` remains Dining with no finer detail. Unknown labels remain Unclassified. These labels describe the source category, not an itemized receipt or business purpose. Local user-assigned labels are planned but are not yet available.
+
+Category, subcategory (including no detail), account, transaction type, minimum/maximum USD amount, status, and search filters intersect. Amount bounds use the positive or zero transaction amount, including refunds. Invalid or reversed bounds prevent export. Reset list filters preserves the global dates; a selected filter with no rows after a date refresh stays selected. These controls affect the list and its CSV, while dashboard totals, charts, and comparisons retain their recorded-category/date scope. Transaction CSVs include both recorded and grouped labels with their classification provenance.
+
 ## Repository map
 
 ```text
