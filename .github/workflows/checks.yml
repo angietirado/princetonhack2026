@@ -1,52 +1,21 @@
-name: Checks
+name: Blockwise checks
 on: [push, pull_request]
 jobs:
-  backend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.13.8"
-      - run: uv sync --all-packages --locked
-      - run: uv run --all-packages pytest
-  frontend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/frontend/package-lock.json
-      - run: npm ci
-      - run: npm run build
-  dashboard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker compose --env-file .env.example --profile tools run --build --rm dashboard-tests
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build and start the fixture stack
+      - name: Backend tests
+        run: docker compose --env-file .env.example --profile tools run --build --rm backend-tests
+      - name: Dashboard tests
+        run: docker compose --env-file .env.example --profile tools run --build --rm dashboard-tests
+      - name: Start both apps
         run: docker compose --env-file .env.example up --build --detach --wait --wait-timeout 120
-      - name: Check frontend and backend routing
-        run: docker compose --env-file .env.example exec -T backend python scripts/smoke_docker.py --frontend-url http://frontend:8080 --backend-url http://127.0.0.1:8765
-      - name: Check the standalone generator without external writes
-        run: docker compose --env-file .env.example --profile tools run --build --rm generator --target nessie
-      - name: Check generated data survives initialization and recreation
-        run: |
-          docker compose --env-file .env.example --profile tools run --rm generator --scenario overspending
-          docker compose --env-file .env.example up --force-recreate --detach --wait --wait-timeout 120
-          docker compose exec -T backend python -c "import json; assert json.load(open('.data/demo.json'))['scenario'] == 'overspending'"
-      - name: Show container logs on failure
+      - name: Verify complete experiment
+        run: docker compose --env-file .env.example exec -T backend python scripts/smoke_lab.py
+      - name: Logs on failure
         if: failure()
-        run: docker compose logs --no-color
-      - name: Stop the test stack
+        run: docker compose --env-file .env.example logs --no-color
+      - name: Stop CI stack
         if: always()
-        run: docker compose down
+        run: docker compose --env-file .env.example down

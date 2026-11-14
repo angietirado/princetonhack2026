@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173f35">
+  <meta name="description" content="Explore the choices people make in Blockwise's Houston shopping simulation.">
+  <title>Blockwise — Research desk</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to results</a>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="Blockwise research desk home"><span class="brand-mark" aria-hidden="true">b<span></span></span><span>blockwise<span class="brand-section">research desk</span></span></a>
+    <nav aria-label="Apps">
+      <span class="nav-current" aria-current="page">Analytics</span>
+      <a id="participant-link" href="http://localhost:5183" target="_blank" rel="noopener">Open the challenge <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span> Houston shopping experiment</p>
+        <h1 id="page-title">Every choice has<br>a tradeoff.</h1>
+        <p class="hero-description">See how people balance money, time, and convenience — and what changes when they see their alternatives.</p>
+      </div>
+      <aside class="study-card" aria-label="About the experiment">
+        <span class="study-number">01 / FIELD NOTES</span>
+        <h2>A real choice.<br>A simulated setting.</h2>
+        <p>CoStar home locations. Fictional stores, prices, and modeled travel. These results describe this experiment, not Houston households.</p>
+        <div class="study-rule"><span>Money</span><span aria-hidden="true">×</span><span>Time</span><span aria-hidden="true">×</span><span>Choice</span></div>
+      </aside>
+    </section>
+
+    <section class="workspace" aria-label="Experiment results">
+      <div class="filter-row">
+        <fieldset class="mode-control" id="data-modes">
+          <legend class="sr-only">Choose the source of sessions</legend>
+          <label><input type="radio" name="data-mode" value="participants" checked><span>Participants</span></label>
+          <label><input type="radio" name="data-mode" value="demo"><span>Demo data</span></label>
+          <label><input type="radio" name="data-mode" value="all"><span>All sessions</span></label>
+        </fieldset>
+        <div class="filter-actions">
+          <div class="select-field"><label for="scenario-filter">Scenario</label><select id="scenario-filter"><option value="">All scenarios</option></select></div>
+          <button class="button button-quiet" id="refresh-button" type="button"><span aria-hidden="true">↻</span> Refresh</button>
+          <button class="button button-outline" id="export-button" type="button" disabled><span aria-hidden="true">↓</span> Export CSV</button>
+        </div>
+      </div>
+      <div class="data-context">
+        <p id="data-context">Participant submissions only. Demo sessions are excluded.</p>
+        <div><span id="updated-at">Waiting for results</span><button type="button" class="text-button" id="access-toggle" aria-expanded="false" aria-controls="access-panel">Access settings</button></div>
+      </div>
+      <section class="access-panel" id="access-panel" aria-labelledby="access-title" hidden>
+        <div><h2 id="access-title">Analytics access</h2><p>If this installation requires an access token, enter it here. It stays in this browser tab.</p></div>
+        <form id="access-form">
+          <label class="sr-only" for="access-token">Analytics access token</label>
+          <input id="access-token" type="password" autocomplete="off" spellcheck="false" placeholder="Analytics access token">
+          <button class="button button-primary" type="submit">Apply</button>
+          <button class="button button-quiet" id="clear-token" type="button">Clear</button>
+        </form>
+      </section>
+      <div class="message message-error" id="error-message" role="alert" hidden></div>
+      <div class="message message-info" id="mode-notice" hidden></div>
+      <p id="loading-status" class="sr-only" role="status" aria-live="polite"></p>
+
+      <div id="results" aria-busy="true">
+        <section class="metrics" aria-label="Key results">
+          <article class="metric">
+            <p class="metric-label">Sessions</p><strong id="metric-sessions">—</strong><p id="metric-sessions-note">Loading the experiment</p>
+          </article>
+          <article class="metric">
+            <p class="metric-label">Average initial cost</p><strong id="metric-cost">—</strong><p id="metric-cost-note">Complete basket + modeled transport</p>
+          </article>
+          <article class="metric metric-accent">
+            <p class="metric-label">Average paired savings</p><strong id="metric-savings">—</strong><p id="metric-savings-note">Same scenario and constraints</p>
+          </article>
+          <article class="metric">
+            <p class="metric-label">Average time change</p><strong id="metric-time">—</strong><p id="metric-time-note">Revised minus initial trip time</p>
+          </article>
+        </section>
+
+        <div id="empty-state" class="empty-state" hidden>
+          <span class="empty-icon" aria-hidden="true">↗</span>
+          <div><p class="eyebrow">A clear starting point</p><h2 id="empty-title">Your first choice starts the story.</h2><p id="empty-description">No participant sessions have been collected yet. Open the challenge and submit a shopping plan to see it here.</p></div>
+          <a class="button button-primary" id="empty-challenge-link" href="http://localhost:5183" target="_blank" rel="noopener">Open the challenge <span aria-hidden="true">↗</span></a>
+        </div>
+
+        <div class="chart-grid">
+          <section class="panel scatter-panel" aria-labelledby="tradeoffs-title">
+            <div class="panel-heading"><div><p class="eyebrow">The shape of a decision</p><h2 id="tradeoffs-title">Money meets time</h2></div><span class="count-badge" id="tradeoffs-count">0 choices</span></div>
+            <p class="panel-description">Each point is a submitted plan. Lower and further left means less time and money in this simulation.</p>
+            <div class="chart-legend"><span><i class="legend-dot initial"></i>Initial</span><span><i class="legend-dot revised"></i>Revised</span><span><i class="legend-cross">×</i>Over a limit</span></div>
+            <div id="scatter-chart" class="scatter-chart"><p class="chart-empty">Waiting for submitted choices.</p></div>
+            <details class="chart-data"><summary>View chart values</summary><div class="table-scroll"><table><caption class="sr-only">Submitted choices shown in the money and time chart</caption><thead><tr><th scope="col">Session</th><th scope="col">Stage</th><th scope="col">Cost</th><th scope="col">Time</th><th scope="col">Within limits</th></tr></thead><tbody id="tradeoffs-table"></tbody></table></div></details>
+          </section>
+          <section class="panel stores-panel" aria-labelledby="stores-title">
+            <div class="panel-heading"><div><p class="eyebrow">Where baskets go</p><h2 id="stores-title">Stores people choose</h2></div></div>
+            <p class="panel-description">Count of submitted plans that include each store. A plan can include more than one store.</p>
+            <div id="store-chart" class="store-chart"><p class="chart-empty">No store choices yet.</p></div>
+            <div class="panel-footnote"><span aria-hidden="true">↳</span> Includes initial and revised plans. These are experimental choices, not store visits.</div>
+          </section>
+        </div>
+
+        <section class="method-note" aria-label="How to interpret these results">
+          <span class="method-symbol" aria-hidden="true">i</span><div><h2>Compare like with like.</h2><p id="pair-note">Savings and time changes use each session’s initial and latest revised choices, only when the scenario and constraints match. Descriptive results do not prove that recommendations caused an improvement.</p><ul id="summary-notices"></ul></div>
+        </section>
+
+        <section class="panel scenarios-panel" aria-labelledby="scenarios-title">
+          <div class="panel-heading"><div><p class="eyebrow">Keep the setting in view</p><h2 id="scenarios-title">By scenario</h2></div><span class="count-badge" id="scenario-count">0 scenarios</span></div>
+          <div class="table-scroll"><table class="scenario-table"><caption class="sr-only">Session and choice counts for each scenario</caption><thead><tr><th scope="col">Scenario</th><th scope="col">Sessions</th><th scope="col">Initial choices</th><th scope="col">Revised choices</th><th scope="col"><span class="sr-only">Filter</span></th></tr></thead><tbody id="scenario-table"></tbody></table></div>
+        </section>
+
+        <section class="panel sessions-panel" aria-labelledby="sessions-title">
+          <div class="panel-heading"><div><p class="eyebrow">Behind the aggregate</p><h2 id="sessions-title">Session notebook</h2></div><span class="count-badge" id="session-total">0 sessions</span></div>
+          <p class="panel-description">Anonymous sessions, their constraints, and the choices they submitted. Open a session to inspect its full history.</p>
+          <div class="table-scroll"><table class="session-table"><caption class="sr-only">Anonymous shopping experiment sessions, newest first</caption><thead><tr><th scope="col">Session / scenario</th><th scope="col">Started</th><th scope="col">Progress</th><th scope="col">Initial → latest</th><th scope="col">Comparison</th><th scope="col"><span class="sr-only">Details</span></th></tr></thead><tbody id="session-table"></tbody></table></div>
+          <div class="pagination"><p id="page-label">No sessions</p><div><button class="button button-quiet" id="previous-page" type="button" disabled>← Previous</button><button class="button button-quiet" id="next-page" type="button" disabled>Next →</button></div></div>
+        </section>
+      </div>
+    </section>
+    <footer class="site-footer"><span>blockwise <span class="footer-dot">·</span> small decisions, visible tradeoffs</span><p>Anonymous choices. Simulated prices and travel. Houston scenarios.</p></footer>
+  </main>
+
+  <dialog id="session-dialog" aria-labelledby="detail-title">
+    <div class="dialog-top"><div><p class="eyebrow">Session notebook</p><h2 id="detail-title">Session details</h2></div><button type="button" id="close-detail" class="icon-button" aria-label="Close session details">×</button></div>
+    <div id="detail-content"></div>
+  </dialog>
+</body>
+</html>
+

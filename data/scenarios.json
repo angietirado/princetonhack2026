@@ -1,0 +1,557 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "houston-heights",
+      "version": "c9961275da5b",
+      "name": "Heights shopping challenge",
+      "description": "Complete the same eight-item basket from a home near Heights. Decide what convenience is worth to you.",
+      "home": {
+        "label": "Your Heights starting point",
+        "latitude": 29.795895,
+        "longitude": -95.399857,
+        "housing_context": "Recorded Houston home location. No resident income or spending is inferred.",
+        "source": "costar",
+        "source_record_id": "216300602",
+        "source_dataset": "residential-listings",
+        "recorded_address": "1342 Allston Street",
+        "housing_price_usd": null,
+        "housing_price_basis": "sale_asking"
+      },
+      "defaults": {
+        "budget_cents": 6500,
+        "time_budget_minutes": 45,
+        "travel_mode": "drive",
+        "max_stores": 2
+      },
+      "basket": [
+        {
+          "id": "milk",
+          "name": "Milk",
+          "quantity": 1,
+          "unit": "1 gallon",
+          "category": "Dairy"
+        },
+        {
+          "id": "eggs",
+          "name": "Eggs",
+          "quantity": 1,
+          "unit": "dozen",
+          "category": "Dairy"
+        },
+        {
+          "id": "bread",
+          "name": "Whole-wheat bread",
+          "quantity": 2,
+          "unit": "loaf",
+          "category": "Bakery"
+        },
+        {
+          "id": "rice",
+          "name": "Rice",
+          "quantity": 1,
+          "unit": "2 lb bag",
+          "category": "Pantry"
+        },
+        {
+          "id": "chicken",
+          "name": "Chicken",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Protein"
+        },
+        {
+          "id": "apples",
+          "name": "Apples",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Produce"
+        },
+        {
+          "id": "greens",
+          "name": "Salad greens",
+          "quantity": 1,
+          "unit": "bag",
+          "category": "Produce"
+        },
+        {
+          "id": "coffee",
+          "name": "Ground coffee",
+          "quantity": 1,
+          "unit": "12 oz bag",
+          "category": "Pantry"
+        }
+      ],
+      "stores": [
+        {
+          "id": "houston-heights-corner",
+          "name": "Corner Market",
+          "latitude": 29.796614,
+          "longitude": -95.398201,
+          "shopping_minutes": 7,
+          "prices": {
+            "milk": 519,
+            "eggs": 428,
+            "bread": 389,
+            "rice": 493,
+            "chicken": 844,
+            "apples": 324,
+            "greens": 428,
+            "coffee": 1169
+          }
+        },
+        {
+          "id": "houston-heights-grove",
+          "name": "Grove Grocer",
+          "latitude": 29.79859,
+          "longitude": -95.404826,
+          "shopping_minutes": 10,
+          "prices": {
+            "milk": 419,
+            "eggs": 342,
+            "bread": 329,
+            "rice": 398,
+            "chicken": 701,
+            "apples": 204,
+            "greens": 263,
+            "coffee": 989
+          }
+        },
+        {
+          "id": "houston-heights-pantry",
+          "name": "Pantry & Co.",
+          "latitude": 29.792481,
+          "longitude": -95.393128,
+          "shopping_minutes": 11,
+          "prices": {
+            "milk": 379,
+            "eggs": 355,
+            "bread": 239,
+            "rice": 280,
+            "chicken": 727,
+            "apples": 274,
+            "greens": 362,
+            "coffee": 674
+          }
+        },
+        {
+          "id": "houston-heights-value",
+          "name": "Value Foods",
+          "latitude": 29.789607,
+          "longitude": -95.413314,
+          "shopping_minutes": 16,
+          "prices": {
+            "milk": 327,
+            "eggs": 270,
+            "bread": 248,
+            "rice": 318,
+            "chicken": 532,
+            "apples": 214,
+            "greens": 283,
+            "coffee": 791
+          }
+        },
+        {
+          "id": "houston-heights-fresh",
+          "name": "Fresh Stop",
+          "latitude": 29.803531,
+          "longitude": -95.382777,
+          "shopping_minutes": 12,
+          "prices": {
+            "milk": 431,
+            "eggs": 296,
+            "bread": 299,
+            "rice": 417,
+            "chicken": 454,
+            "apples": 174,
+            "greens": 230,
+            "coffee": 944
+          }
+        }
+      ],
+      "travel": {
+        "method": "modeled_distance",
+        "road_factor": 1.3,
+        "walk_kmh": 4.5,
+        "drive_kmh": 24,
+        "drive_cost_cents_per_km": 25,
+        "drive_parking_minutes_per_stop": 3
+      },
+      "provenance": {
+        "housing": "Home coordinates come from a public-display CoStar record in the supplied historical Houston kit. Not household financial data.",
+        "prices": "All store prices are simulated, not live or verified quotes. Prices include any modeled tax; no discounts or availability variation.",
+        "travel": "Distance-based travel and shopping time estimates; not routing directions, live traffic, or transit service.",
+        "stores": "All five stores are fictional simulation locations around the selected home.",
+        "budget": "Assigned shopping allowance, not an income estimate from property value."
+      }
+    },
+    {
+      "id": "houston-montrose",
+      "version": "64beb5d527fc",
+      "name": "Montrose shopping challenge",
+      "description": "Complete the same eight-item basket from a home near Montrose. Decide what convenience is worth to you.",
+      "home": {
+        "label": "Your Montrose starting point",
+        "latitude": 29.74893,
+        "longitude": -95.39759,
+        "housing_context": "Recorded Houston home location. No resident income or spending is inferred.",
+        "source": "costar",
+        "source_record_id": "218324697",
+        "source_dataset": "residential-listings",
+        "recorded_address": "2100 Commonwealth Street",
+        "housing_price_usd": null,
+        "housing_price_basis": "sale_asking"
+      },
+      "defaults": {
+        "budget_cents": 6000,
+        "time_budget_minutes": 50,
+        "travel_mode": "walk",
+        "max_stores": 2
+      },
+      "basket": [
+        {
+          "id": "milk",
+          "name": "Milk",
+          "quantity": 1,
+          "unit": "1 gallon",
+          "category": "Dairy"
+        },
+        {
+          "id": "eggs",
+          "name": "Eggs",
+          "quantity": 1,
+          "unit": "dozen",
+          "category": "Dairy"
+        },
+        {
+          "id": "bread",
+          "name": "Whole-wheat bread",
+          "quantity": 2,
+          "unit": "loaf",
+          "category": "Bakery"
+        },
+        {
+          "id": "rice",
+          "name": "Rice",
+          "quantity": 1,
+          "unit": "2 lb bag",
+          "category": "Pantry"
+        },
+        {
+          "id": "chicken",
+          "name": "Chicken",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Protein"
+        },
+        {
+          "id": "apples",
+          "name": "Apples",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Produce"
+        },
+        {
+          "id": "greens",
+          "name": "Salad greens",
+          "quantity": 1,
+          "unit": "bag",
+          "category": "Produce"
+        },
+        {
+          "id": "coffee",
+          "name": "Ground coffee",
+          "quantity": 1,
+          "unit": "12 oz bag",
+          "category": "Pantry"
+        }
+      ],
+      "stores": [
+        {
+          "id": "houston-montrose-corner",
+          "name": "Corner Market",
+          "latitude": 29.749649,
+          "longitude": -95.395935,
+          "shopping_minutes": 7,
+          "prices": {
+            "milk": 519,
+            "eggs": 428,
+            "bread": 389,
+            "rice": 493,
+            "chicken": 844,
+            "apples": 324,
+            "greens": 428,
+            "coffee": 1169
+          }
+        },
+        {
+          "id": "houston-montrose-grove",
+          "name": "Grove Grocer",
+          "latitude": 29.751625,
+          "longitude": -95.402556,
+          "shopping_minutes": 10,
+          "prices": {
+            "milk": 419,
+            "eggs": 342,
+            "bread": 329,
+            "rice": 398,
+            "chicken": 701,
+            "apples": 204,
+            "greens": 263,
+            "coffee": 989
+          }
+        },
+        {
+          "id": "houston-montrose-pantry",
+          "name": "Pantry & Co.",
+          "latitude": 29.745516,
+          "longitude": -95.390865,
+          "shopping_minutes": 11,
+          "prices": {
+            "milk": 379,
+            "eggs": 355,
+            "bread": 239,
+            "rice": 280,
+            "chicken": 727,
+            "apples": 274,
+            "greens": 362,
+            "coffee": 674
+          }
+        },
+        {
+          "id": "houston-montrose-value",
+          "name": "Value Foods",
+          "latitude": 29.742642,
+          "longitude": -95.411041,
+          "shopping_minutes": 16,
+          "prices": {
+            "milk": 327,
+            "eggs": 270,
+            "bread": 248,
+            "rice": 318,
+            "chicken": 532,
+            "apples": 214,
+            "greens": 283,
+            "coffee": 791
+          }
+        },
+        {
+          "id": "houston-montrose-fresh",
+          "name": "Fresh Stop",
+          "latitude": 29.756566,
+          "longitude": -95.380518,
+          "shopping_minutes": 12,
+          "prices": {
+            "milk": 431,
+            "eggs": 296,
+            "bread": 299,
+            "rice": 417,
+            "chicken": 454,
+            "apples": 174,
+            "greens": 230,
+            "coffee": 944
+          }
+        }
+      ],
+      "travel": {
+        "method": "modeled_distance",
+        "road_factor": 1.3,
+        "walk_kmh": 4.5,
+        "drive_kmh": 24,
+        "drive_cost_cents_per_km": 25,
+        "drive_parking_minutes_per_stop": 3
+      },
+      "provenance": {
+        "housing": "Home coordinates come from a public-display CoStar record in the supplied historical Houston kit. Not household financial data.",
+        "prices": "All store prices are simulated, not live or verified quotes. Prices include any modeled tax; no discounts or availability variation.",
+        "travel": "Distance-based travel and shopping time estimates; not routing directions, live traffic, or transit service.",
+        "stores": "All five stores are fictional simulation locations around the selected home.",
+        "budget": "Assigned shopping allowance, not an income estimate from property value."
+      }
+    },
+    {
+      "id": "houston-eastwood",
+      "version": "235928634114",
+      "name": "Eastwood shopping challenge",
+      "description": "Complete the same eight-item basket from a home near Eastwood. Decide what convenience is worth to you.",
+      "home": {
+        "label": "Your Eastwood starting point",
+        "latitude": 29.739258,
+        "longitude": -95.328842,
+        "housing_context": "Recorded asking sale price: $694,888. Historical listing context; no resident income is inferred.",
+        "source": "costar",
+        "source_record_id": "238666323",
+        "source_dataset": "residential-listings",
+        "recorded_address": "4708 Mckinney Street",
+        "housing_price_usd": 694888.0,
+        "housing_price_basis": "sale_asking"
+      },
+      "defaults": {
+        "budget_cents": 5500,
+        "time_budget_minutes": 35,
+        "travel_mode": "drive",
+        "max_stores": 2
+      },
+      "basket": [
+        {
+          "id": "milk",
+          "name": "Milk",
+          "quantity": 1,
+          "unit": "1 gallon",
+          "category": "Dairy"
+        },
+        {
+          "id": "eggs",
+          "name": "Eggs",
+          "quantity": 1,
+          "unit": "dozen",
+          "category": "Dairy"
+        },
+        {
+          "id": "bread",
+          "name": "Whole-wheat bread",
+          "quantity": 2,
+          "unit": "loaf",
+          "category": "Bakery"
+        },
+        {
+          "id": "rice",
+          "name": "Rice",
+          "quantity": 1,
+          "unit": "2 lb bag",
+          "category": "Pantry"
+        },
+        {
+          "id": "chicken",
+          "name": "Chicken",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Protein"
+        },
+        {
+          "id": "apples",
+          "name": "Apples",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Produce"
+        },
+        {
+          "id": "greens",
+          "name": "Salad greens",
+          "quantity": 1,
+          "unit": "bag",
+          "category": "Produce"
+        },
+        {
+          "id": "coffee",
+          "name": "Ground coffee",
+          "quantity": 1,
+          "unit": "12 oz bag",
+          "category": "Pantry"
+        }
+      ],
+      "stores": [
+        {
+          "id": "houston-eastwood-corner",
+          "name": "Corner Market",
+          "latitude": 29.739977,
+          "longitude": -95.327187,
+          "shopping_minutes": 7,
+          "prices": {
+            "milk": 519,
+            "eggs": 428,
+            "bread": 389,
+            "rice": 493,
+            "chicken": 844,
+            "apples": 324,
+            "greens": 428,
+            "coffee": 1169
+          }
+        },
+        {
+          "id": "houston-eastwood-grove",
+          "name": "Grove Grocer",
+          "latitude": 29.741953,
+          "longitude": -95.333808,
+          "shopping_minutes": 10,
+          "prices": {
+            "milk": 419,
+            "eggs": 342,
+            "bread": 329,
+            "rice": 398,
+            "chicken": 701,
+            "apples": 204,
+            "greens": 263,
+            "coffee": 989
+          }
+        },
+        {
+          "id": "houston-eastwood-pantry",
+          "name": "Pantry & Co.",
+          "latitude": 29.735844,
+          "longitude": -95.322117,
+          "shopping_minutes": 11,
+          "prices": {
+            "milk": 379,
+            "eggs": 355,
+            "bread": 239,
+            "rice": 280,
+            "chicken": 727,
+            "apples": 274,
+            "greens": 362,
+            "coffee": 674
+          }
+        },
+        {
+          "id": "houston-eastwood-value",
+          "name": "Value Foods",
+          "latitude": 29.73297,
+          "longitude": -95.342291,
+          "shopping_minutes": 16,
+          "prices": {
+            "milk": 327,
+            "eggs": 270,
+            "bread": 248,
+            "rice": 318,
+            "chicken": 532,
+            "apples": 214,
+            "greens": 283,
+            "coffee": 791
+          }
+        },
+        {
+          "id": "houston-eastwood-fresh",
+          "name": "Fresh Stop",
+          "latitude": 29.746894,
+          "longitude": -95.311772,
+          "shopping_minutes": 12,
+          "prices": {
+            "milk": 431,
+            "eggs": 296,
+            "bread": 299,
+            "rice": 417,
+            "chicken": 454,
+            "apples": 174,
+            "greens": 230,
+            "coffee": 944
+          }
+        }
+      ],
+      "travel": {
+        "method": "modeled_distance",
+        "road_factor": 1.3,
+        "walk_kmh": 4.5,
+        "drive_kmh": 24,
+        "drive_cost_cents_per_km": 25,
+        "drive_parking_minutes_per_stop": 3
+      },
+      "provenance": {
+        "housing": "Home coordinates come from a public-display CoStar record in the supplied historical Houston kit. Not household financial data.",
+        "prices": "All store prices are simulated, not live or verified quotes. Prices include any modeled tax; no discounts or availability variation.",
+        "travel": "Distance-based travel and shopping time estimates; not routing directions, live traffic, or transit service.",
+        "stores": "All five stores are fictional simulation locations around the selected home.",
+        "budget": "Assigned shopping allowance, not an income estimate from property value."
+      }
+    }
+  ]
+}

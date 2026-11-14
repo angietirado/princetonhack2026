@@ -1,97 +1,96 @@
-x-generator: &generator
-  build:
-    context: .
-    target: data-generator
-  volumes:
-    - app-data:/app/.data
-    - ${APP_SETTINGS_FILE:-./settings.toml}:/app/settings.toml:ro
-  environment:
-    APP_SETTINGS_FILE: /app/settings.toml
-    NESSIE_API_KEY: ${NESSIE_API_KEY:-}
-  read_only: true
-  tmpfs:
-    - /tmp
-
+name: blockwise-lab
 services:
-  data-init:
-    <<: *generator
-    entrypoint: ["python", "/app/docker/ensure_fixture.py"]
-    # Offline initialization needs no provider credentials.
-    environment: {}
-    restart: "no"
-
   backend:
     build:
       context: .
       target: backend
-    mem_limit: 1g
-    cpus: 1
     environment:
-      APP_SETTINGS_FILE: /app/settings.toml
-      NESSIE_API_KEY: ${NESSIE_API_KEY:-}
-      APP_API_TOKEN: ${APP_API_TOKEN:-}
-      PHOTON_API_KEY: ${PHOTON_API_KEY:-}
-      PHOTON_WEBHOOK_SECRET: ${PHOTON_WEBHOOK_SECRET:-}
+      LAB_SCENARIOS_PATH: /app/data/scenarios.json
+      LAB_DB_PATH: /app/.data/lab.sqlite3
+      LAB_ADMIN_TOKEN: ${LAB_ADMIN_TOKEN:-}
+      LAB_AI_ENABLED: ${LAB_AI_ENABLED:-false}
+      LAB_AI_PROVIDER: ${LAB_AI_PROVIDER:-gemini}
+      LAB_AI_MODEL: ${LAB_AI_MODEL:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:8775:8765"
     volumes:
-      - app-data:/app/.data
-      - ${APP_SETTINGS_FILE:-./settings.toml}:/app/settings.toml:ro
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
+      - lab-data:/app/.data
+    mem_limit: 1g
+    cpus: 1
     read_only: true
-    tmpfs:
-      - /tmp
+    tmpfs: [/tmp]
     init: true
-
-  frontend:
+  participant:
     build:
       context: .
-      dockerfile: apps/frontend/Dockerfile
-      target: frontend
-    mem_limit: 128m
-    cpus: 0.5
+      dockerfile: docker/web.Dockerfile
+      target: participant
     ports:
-      - "127.0.0.1:5173:8080"
+      - "127.0.0.1:5183:8080"
     depends_on:
       backend:
         condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.5
     read_only: true
-    tmpfs:
-      - /tmp
-
-  generator:
-    <<: *generator
-    profiles: ["tools"]
-
+    tmpfs: [/tmp]
+  analytics:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      target: analytics
+    ports:
+      - "127.0.0.1:5184:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.5
+    read_only: true
+    tmpfs: [/tmp]
   backend-tests:
     build:
       context: .
       target: backend-tests
-    profiles: ["tools"]
+    profiles: [tools]
     mem_limit: 1g
     cpus: 1
     read_only: true
-    tmpfs:
-      - /tmp
-
+    tmpfs: [/tmp]
   dashboard-tests:
     build:
       context: .
-      dockerfile: apps/frontend/Dockerfile
+      dockerfile: docker/web.Dockerfile
       target: dashboard-tests
-    profiles: ["tools"]
+    profiles: [tools]
     mem_limit: 512m
     cpus: 1
     read_only: true
-    tmpfs:
-      - /tmp
+    tmpfs: [/tmp]
     environment:
       npm_config_cache: /tmp/npm-cache
       NODE_OPTIONS: --max-old-space-size=256
-
+  browser-tests:
+    build:
+      context: .
+      dockerfile: docker/browser.Dockerfile
+    profiles: [tools]
+    environment:
+      PARTICIPANT_URL: http://participant:8080
+      ANALYTICS_URL: http://analytics:8080
+      BACKEND_URL: http://backend:8765
+    volumes:
+      - ./.data/browser-artifacts:/artifacts
+    mem_limit: 1g
+    cpus: 1
+    shm_size: 256m
+    init: true
+    depends_on:
+      participant:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
 volumes:
-  app-data:
+  lab-data:

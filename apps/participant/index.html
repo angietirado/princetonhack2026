@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173f35">
+  <meta name="description" content="Explore the tradeoffs between your grocery budget, your time, and your neighborhood in a Houston shopping simulation.">
+  <title>Blockwise — Your time. Your budget. Your neighborhood.</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to challenge</a>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="Blockwise home"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>blockwise<span class="brand-dot">.</span></a>
+    <nav aria-label="Main navigation"><a href="#how-it-works" id="how-link">How it works</a><a id="analytics-link" href="http://localhost:5184">Research dashboard <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <div class="simulation-strip"><span class="small-dot"></span> A HOUSTON SHOPPING EXPERIMENT <span class="strip-divider">/</span> <span>Simulated stores, prices &amp; travel</span></div>
+  <main id="main">
+    <div id="global-error" class="notice error" role="alert" hidden></div>
+    <div id="loading" class="loading-card" role="status"><span class="spinner"></span> Getting your neighborhood ready…</div>
+    <button id="reload" class="button secondary" hidden>Try again</button>
+    <section id="setup" hidden aria-labelledby="hero-title">
+      <div class="intro-grid">
+        <div class="intro-copy">
+          <p class="eyebrow"><span class="line"></span> EVERYDAY CHOICES, DIFFERENT POSSIBILITIES</p>
+          <h1 id="hero-title">A smarter shop.<br><em>On your terms.</em></h1>
+          <p class="hero-description">Same groceries. Different stores. A little more time—or a little more money. What would you choose?</p>
+          <div class="intro-stats"><span><strong>1 basket</strong>Every plan meets the same needs</span><span><strong>Your limits</strong>You decide what is worth it</span></div>
+        </div>
+        <div class="map-card"><div class="map-topline"><span><span class="small-dot"></span> HOUSTON, TEXAS</span><span class="tag">Neighborhood sketch</span></div><div id="preview-map" class="neighborhood-map"></div><div class="map-caption"><span id="preview-location">Choose your starting point</span><span>Locations ≠ directions</span></div></div>
+      </div>
+      <section class="setup-section" aria-labelledby="scenario-heading">
+        <div class="section-heading"><div><p class="eyebrow">01 / YOUR STARTING POINT</p><h2 id="scenario-heading">Pick a neighborhood.</h2></div><p>A real home location. A fictional shopping day.</p></div>
+        <div id="scenario-cards" class="scenario-grid" role="group" aria-label="Choose a scenario"></div>
+      </section>
+      <form id="start-form" class="setup-panel">
+        <div class="setup-panel-copy"><p class="eyebrow">02 / YOUR RULES</p><h2>Make room for <br>what matters.</h2><p>Set a hypothetical allowance and time limit. No personal financial details needed.</p></div>
+        <div class="setup-fields">
+          <div class="field-grid">
+            <label class="field">Shopping budget <span class="input-wrap"><span>$</span><input id="setup-budget" name="budget" type="number" min="0.01" max="10000" step="0.01" required inputmode="decimal"><span>USD</span></span></label>
+            <label class="field">Time for the whole trip <span class="input-wrap"><input id="setup-time" name="time" type="number" min="0" max="1440" step="any" required inputmode="numeric"><span>min</span></span><small>Travel, shopping, and getting home.</small></label>
+            <label class="field">How will you travel?<select id="setup-mode" name="mode"><option value="drive">Driving</option><option value="walk">Walking</option></select></label>
+            <label class="field">Maximum stops<select id="setup-stops" name="stops"><option value="1">1 store</option><option value="2">2 stores</option></select></label>
+          </div>
+          <label class="consent"><input id="consent" type="checkbox" required><span>I agree to save my anonymous choices and optional guide conversation for this shopping experiment. No name or contact details are requested.</span></label>
+          <div class="start-action"><p class="quiet">You choose first. Then explore the alternatives.</p><button id="start-button" class="button primary" type="submit">Start my challenge <span aria-hidden="true">→</span></button></div>
+          <p id="start-status" class="form-status" role="status"></p>
+        </div>
+      </form>
+      <section id="how-it-works" class="how-section" aria-labelledby="how-heading"><p class="eyebrow">SMALL DECISIONS. VISIBLE TRADEOFFS.</p><h2 id="how-heading">Your first instinct, then a fresh perspective.</h2><div class="how-grid"><article><span>01</span><h3>Build your shop</h3><p>Choose where to buy each item in the same fixed basket.</p></article><article><span>02</span><h3>See your options</h3><p>Compare plans that fit your money, time, and stop limits.</p></article><article><span>03</span><h3>Make it yours</h3><p>Keep your choice or try another. There is more than one way to shop well.</p></article></div></section>
+    </section>
+    <section id="challenge" hidden aria-labelledby="challenge-heading">
+      <div class="challenge-header"><div><p class="eyebrow" id="scenario-eyebrow">YOUR HOUSTON CHALLENGE</p><h1 id="challenge-heading">Your basket. Your call.</h1><p id="challenge-description"></p></div><button id="new-session" class="button text-button">Start a new challenge <span aria-hidden="true">↗</span></button></div>
+      <ol class="progress" aria-label="Challenge progress"><li id="step-build" class="active"><span>1</span>Build your shop</li><li id="step-compare"><span>2</span>Explore tradeoffs</li><li id="step-save"><span>3</span>Make your choice</li></ol>
+      <div id="session-notice" class="notice" role="status" hidden></div>
+      <div class="challenge-layout">
+        <div class="shopping-column">
+          <section aria-labelledby="stores-heading"><div class="section-heading compact"><div><p class="eyebrow">THE NEIGHBORHOOD</p><h2 id="stores-heading">Where would you shop?</h2></div><span class="subtle">Choose a whole basket or mix stores.</span></div><div id="store-cards" class="store-grid"></div></section>
+          <section class="basket-card" aria-labelledby="basket-heading"><div class="basket-heading"><div><p class="eyebrow">SAME BASKET, EVERY PLAN</p><h2 id="basket-heading">Your shopping list</h2></div><span id="basket-count" class="tag"></span></div><div id="basket-items"></div><div class="basket-foot"><span>Prices are per listed unit × quantity.</span><span>All prices are simulated.</span></div></section>
+          <section id="recommendations-section" class="recommendations" aria-labelledby="recommendations-heading" hidden><div class="section-heading compact"><div><p class="eyebrow">A FRESH PERSPECTIVE</p><h2 id="recommendations-heading">What else could work?</h2></div><button id="refresh-recommendations" class="button text-button">Refresh options ↻</button></div><p class="section-intro">These plans buy the same basket within your current limits. You decide which tradeoff feels right.</p><div id="recommendations-status" class="notice" role="status" hidden></div><div id="recommendation-cards" class="recommendation-grid"></div><p id="recommendations-note" class="quiet"></p></section>
+          <section id="chat-section" class="chat-section" aria-labelledby="chat-heading" hidden>
+            <div class="section-heading compact"><div><p class="eyebrow">MAKE THE TRADEOFF YOURS</p><h2 id="chat-heading">Talk through your options.</h2></div><span id="chat-mode" class="tag">Shopping guide</span></div>
+            <p class="section-intro">Try a different budget, time limit, transport mode, or number of stops. Suggestions change your plan only when you apply them.</p>
+            <div id="chat-history" class="chat-history" role="log" aria-label="Shopping guide conversation" aria-live="polite" aria-relevant="additions"></div>
+            <div id="chat-proposal" class="chat-proposal" hidden><p class="eyebrow">SUGGESTED LIMITS</p><p id="chat-proposal-summary"></p><div id="chat-plan-options" class="chat-plan-options"></div><button id="chat-apply-limits" class="button secondary" type="button">Apply these limits</button><p class="quiet">Applying prepares a draft. Save your revised choice when you are ready.</p></div>
+            <div class="chat-chips" role="group" aria-label="Quick requests"><button type="button" data-chat-message="one store only">One store only</button><button type="button" data-chat-message="walking">Walking</button><button type="button" data-chat-message="under 30 minutes">Under 30 minutes</button><button type="button" data-chat-message="budget $60">Budget $60</button></div>
+            <form id="chat-form"><label class="sr-only" for="chat-input">Ask the shopping guide</label><textarea id="chat-input" rows="2" maxlength="1500" placeholder="I have 30 minutes and want one store…" required aria-describedby="chat-help"></textarea><div class="chat-form-actions"><p id="chat-help">Money, time, travel, and stops. No personal details needed.</p><button id="chat-send" type="submit" class="button primary">Ask the guide <span aria-hidden="true">→</span></button></div></form>
+            <div id="chat-status" class="form-status" role="status"></div><button id="chat-retry-history" class="button text-button" type="button" hidden>Reload conversation</button>
+          </section>
+          <section id="saved-result" class="saved-result" hidden aria-labelledby="saved-heading"><span class="success-symbol" aria-hidden="true">✓</span><div><p class="eyebrow">CHOICE SAVED</p><h2 id="saved-heading">A shop that works for you.</h2><p id="saved-summary"></p><p class="quiet">Your anonymous choices help us explore how people balance money and time.</p></div></section>
+        </div>
+        <aside class="plan-column" aria-labelledby="plan-heading">
+          <div class="plan-card">
+            <div class="plan-title"><p class="eyebrow">YOUR CURRENT PLAN</p><span id="plan-state" class="tag">Build your basket</span></div><h2 id="plan-heading">Room to work with.</h2>
+            <div class="metric"><div><span>Total cost</span><strong id="total-cost">—</strong></div><div class="meter"><span id="money-meter"></span></div><p id="money-remaining">Choose a store for every item.</p></div>
+            <div class="metric"><div><span>Whole trip</span><strong id="total-time">—</strong></div><div class="meter"><span id="time-meter"></span></div><p id="time-remaining">Includes getting back home.</p></div>
+            <dl class="cost-breakdown"><div><dt>Groceries</dt><dd id="basket-cost">—</dd></div><div><dt>Modeled transport</dt><dd id="transport-cost">—</dd></div><div><dt>Travel / shopping</dt><dd id="time-breakdown">—</dd></div></dl>
+            <div id="route-display" class="route-display"><span class="small-dot"></span> Home → your stores → home</div>
+            <div id="evaluation-error" class="notice error" role="alert" hidden></div>
+            <button id="retry-evaluation" class="button secondary full-width" hidden>Recalculate my plan</button>
+            <button id="save-choice" class="button primary full-width" disabled>Save my first choice <span aria-hidden="true">→</span></button>
+            <p id="save-explainer" class="plan-footnote">Save your first choice to reveal alternatives.</p>
+            <p id="save-status" class="form-status" role="status"></p>
+          </div>
+          <details class="limits-card"><summary>Your limits <span id="limits-summary"></span></summary><form id="limits-form"><label class="field">Budget ($)<input id="active-budget" type="number" min="0.01" max="10000" step="0.01" required></label><label class="field">Whole-trip time (minutes)<input id="active-time" type="number" min="0" max="1440" step="any" required></label><label class="field">Travel<select id="active-mode"><option value="drive">Driving</option><option value="walk">Walking</option></select></label><label class="field">Maximum stops<select id="active-stops"><option value="1">1 store</option><option value="2">2 stores</option></select></label><p class="quiet">Changed limits are saved with your next choice. Comparisons use matching limits.</p><button class="button secondary full-width" type="submit">Apply limits</button></form></details>
+          <div class="mini-map-card"><div id="active-map" class="neighborhood-map"></div><p>Neighborhood sketch · not directions</p></div>
+          <details class="source-card"><summary>About this scenario</summary><p id="source-home"></p><p id="source-housing"></p><div id="source-notes"></div></details>
+        </aside>
+      </div>
+    </section>
+  </main>
+  <footer><a class="brand small" href="./">blockwise<span class="brand-dot">.</span></a><p>Real choices in a simulated neighborhood.<br>Experimental results are not Houston residents’ spending data.</p><span>BUILT FOR THE EVERYDAY</span></footer>
+  <noscript><p class="notice error">This shopping experiment needs JavaScript enabled.</p></noscript>
+</body>
+</html>

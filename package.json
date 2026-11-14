@@ -1,13 +1,15 @@
 {
-  "name": "ledgerly-dashboard",
+  "name": "blockwise-apps",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
-    "start": "node scripts/serve_dashboard.cjs",
-    "test": "node --test tests/dashboard.test.cjs"
+    "test": "node --test tests/participant.test.cjs tests/analytics.test.cjs"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.1",
     "jsdom": "26.1.0"
   }
 }
