@@ -2,6 +2,7 @@ import asyncio
 import json
 import secrets
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Annotated
 
@@ -14,6 +15,7 @@ from standardwebhooks.webhooks import Webhook, WebhookVerificationError
 from starlette.concurrency import run_in_threadpool
 
 from spending_api.agent_tools import SpendingTools
+from spending_api.comparison import ComparisonRequest, SpendingComparison, compare_spending
 from spending_api.config import Settings, load_settings
 from spending_api.costar import CostarCatalog, CostarSearchCriteria
 from spending_api.dashboard import build_dashboard
@@ -52,6 +54,16 @@ def _unique_json_object(pairs):
     return result
 
 
+def _comparison_schema():
+    schema = ComparisonRequest.model_json_schema()
+    definitions = schema.pop("$defs", {})
+    for name in ("baseline", "current"):
+        reference = schema["properties"][name].get("$ref")
+        if reference:
+            schema["properties"][name] = definitions[reference.rsplit("/", 1)[-1]]
+    return schema
+
+
 async def _bounded_json(request: Request) -> dict:
     if request.query_params:
         raise HTTPException(
@@ -75,7 +87,41 @@ async def _bounded_json(request: Request) -> dict:
 
 def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI:
     settings = settings or load_settings()
-    app = FastAPI(title="Spending Companion API", version="0.1.0")
+    comparison_lock = asyncio.Lock()
+    comparison_job: asyncio.Task[SpendingComparison] | None = None
+    comparison_closing = False
+
+    def comparison_finished(job: asyncio.Task[SpendingComparison]) -> None:
+        nonlocal comparison_job, comparison_closing
+        if job.cancelled():
+            # This owner never cancels a native job. Unexpected task cancellation
+            # cannot prove that its thread stopped, so keep admission closed.
+            comparison_closing = True
+            return
+        job.exception()  # Retrieve failures even after the HTTP caller has left.
+        if comparison_job is job:
+            comparison_job = None
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        nonlocal comparison_closing
+        try:
+            yield
+        finally:
+            comparison_closing = True
+            # A source load remains request-owned and cancellable. Wait until it
+            # releases admission before reading the retained native-job slot.
+            async with comparison_lock:
+                pending = comparison_job
+            if pending is not None:
+                try:
+                    await asyncio.shield(pending)
+                except Exception:
+                    # The done callback has consumed the failure. Cancellation
+                    # is deliberately not swallowed or reported as worker exit.
+                    pass
+
+    app = FastAPI(title="Spending Companion API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -247,6 +293,51 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
         dates: Annotated[DateRange, Depends(window)],
     ):
         return tools.find_recurring_charges(dates)
+
+    @app.post(
+        "/api/v1/spending/compare",
+        response_model=SpendingComparison,
+        dependencies=[Depends(authorize)],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": _comparison_schema()}},
+            }
+        },
+    )
+    async def spending_comparison(request: Request, response: Response):
+        nonlocal comparison_job
+        response.headers["Cache-Control"] = "no-store"
+        if comparison_closing:
+            raise HTTPException(503, "Spending comparisons are temporarily unavailable")
+        try:
+            periods = ComparisonRequest.model_validate(await _bounded_json(request))
+        except ValidationError:
+            raise HTTPException(
+                422, "Provide two ordered, nonoverlapping baseline and current UTC date ranges"
+            ) from None
+        if comparison_lock.locked() or comparison_job is not None:
+            raise HTTPException(429, "A spending comparison is running; retry shortly")
+        async with comparison_lock:
+            if comparison_closing:
+                raise HTTPException(503, "Spending comparisons are temporarily unavailable")
+            try:
+                async with asyncio.timeout(45):
+                    tools = await scoped_tools(None)
+                    if comparison_closing:
+                        raise HTTPException(503, "Spending comparisons are temporarily unavailable")
+                    # Register ownership before yielding. HTTP timeout/cancellation
+                    # releases the request lock but not this native-work slot.
+                    comparison_job = asyncio.create_task(
+                        run_in_threadpool(compare_spending, tools, periods),
+                        name="spending-comparison",
+                    )
+                    comparison_job.add_done_callback(comparison_finished)
+                    return await asyncio.shield(comparison_job)
+            except TimeoutError:
+                raise HTTPException(504, "Spending comparison deadline exceeded") from None
+            except (OSError, ValueError, KeyError, TypeError):
+                raise HTTPException(503, "Observed data cannot support this comparison") from None
 
     @app.post("/webhooks/photon", status_code=204, response_class=Response)
     async def photon_webhook(request: Request):

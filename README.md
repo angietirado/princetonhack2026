@@ -94,6 +94,20 @@ docker compose --env-file .env.example exec -T backend python -m spending_api.te
 
 `exec` uses the running backend's mounted settings and runtime credentials; its `--env-file .env.example` does not switch that container to fixture mode. The commands use the pinned customer, return integer-cent amounts, and make no financial writes. Add `--start YYYY-MM-DD --end YYYY-MM-DD` to limit the transaction period. Natural-language questions use the separate opt-in API below.
 
+## Compare spending
+
+Open **Insights → Compare two periods** after loading the dashboard. Enter an earlier and a later date range, or use **Use displayed period and preceding period** to fill two adjacent periods of equal length. Review the dates, then submit; filling fields never starts a request. Comparison dates are independent of the dashboard date picker.
+
+The direct comparison works with AI disabled. It shows observed net totals, signed changes, category and merchant contributions, deterministic findings, and source details. Money is calculated in integer USD cents. Percentages are undefined for a zero or negative earlier net total. Unequal periods retain valid total differences but do not establish a change in spending rate. Empty observed history is not proof of complete zero spending.
+
+`POST /api/v1/spending/compare` accepts only two explicit, nonoverlapping UTC windows:
+
+```json
+{"baseline":{"start":"2026-11-01","end":"2026-11-07"},"current":{"start":"2026-11-08","end":"2026-11-14"}}
+```
+
+All qualifying records contribute to totals. Displays contain at most ten category groups, ten merchant groups, and twenty individual evidence rows; omitted counts and sums remain explicit. Merchant IDs distinguish merchants with the same name. The model can invoke this same calculation through its spending specialist, while the dashboard form needs no model call.
+
 ## LangChain assistant
 
 The backend uses a LangChain advisor with Deep Agents delegation to spending and optional local-research specialists, backed by Gemini or NVIDIA Nemotron. It exposes read-only tools, with server-bound customer data, bounded model/tool calls, and evidence alongside each answer. AI is disabled in the default offline settings.
@@ -164,6 +178,8 @@ The terminal makes one authenticated request to the local API. Each question nee
 Opt-in LangChain AI orchestration is implemented for the question API. Photon stays disabled by default. Its receiver only queues events; the [quick-control worker](docs/INTEGRATIONS.md#photon-20-beta-quick-controls) prepares one reply, and sends only with an explicit `--send`. No phone delivery has been verified. The pinned Nessie customer comes from a completed 300-transaction historical simulation. Credentials are not committed.
 
 ## Checks with Docker
+
+The default application containers are also capped: the backend has 1 GiB of memory and one CPU, and the frontend has 128 MiB and half a CPU. These limits contain resource use; they do not replace input bounds or leak checks.
 
 Run backend configuration/API tests and dashboard DOM regression tests inside Docker, one service at a time. Test containers are capped at 1 GiB and 512 MiB respectively:
 

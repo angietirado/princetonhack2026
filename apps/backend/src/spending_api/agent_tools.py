@@ -1,6 +1,9 @@
 """Provider-neutral tools: bind an authorized snapshot before exposing to an LLM."""
 
+import hashlib
+import json
 from collections import defaultdict
+from datetime import UTC
 
 from spending_api.models import (
     CategoryTotal,
@@ -12,6 +15,42 @@ from spending_api.models import (
 )
 
 SPENDING_KINDS = {"purchase", "bill_payment", "fee", "chargeback"}
+
+
+def bind_snapshot(tools: "SpendingTools") -> tuple["SpendingTools", str]:
+    """Copy, validate one customer, normalize UTC, and hash records without a giant JSON copy."""
+    snapshot = tools.snapshot.model_copy(deep=True)
+    account_ids = [row.id for row in snapshot.accounts]
+    tx_ids = [row.id for row in snapshot.transactions]
+    account_set = set(account_ids)
+    customers = {row.customer_id for row in snapshot.accounts}
+    if (
+        len(account_set) != len(account_ids)
+        or len(set(tx_ids)) != len(tx_ids)
+        or any(not value.strip() for value in account_ids + tx_ids)
+        or len(customers) > 1
+        or any(not value.strip() for value in customers)
+        or any(row.account_id not in account_set for row in snapshot.transactions)
+    ):
+        raise ValueError("Snapshot has invalid customer scope or duplicate identities")
+    for tx in snapshot.transactions:
+        if tx.occurred_at.tzinfo is None or tx.occurred_at.utcoffset() is None:
+            raise ValueError("Snapshot timestamps must include a timezone")
+        if type(tx.amount_cents) is not int or tx.amount_cents < 0:
+            raise ValueError("Snapshot money must be nonnegative integer cents")
+        tx.occurred_at = tx.occurred_at.astimezone(UTC)
+    digest = hashlib.sha256(b"authorized-spending-snapshot-v1\0")
+
+    def add(value):
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        digest.update(str(len(encoded)).encode() + b":" + encoded)
+
+    add(snapshot.source)
+    for label, rows in (("accounts", snapshot.accounts), ("transactions", snapshot.transactions)):
+        add(label)
+        for row in sorted(rows, key=lambda row: row.id):
+            add(row.model_dump(mode="json"))
+    return SpendingTools(snapshot), digest.hexdigest()
 
 
 class SpendingTools:

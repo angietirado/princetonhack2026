@@ -24,6 +24,8 @@ services:
     build:
       context: .
       target: backend
+    mem_limit: 1g
+    cpus: 1
     environment:
       APP_SETTINGS_FILE: /app/settings.toml
       NESSIE_API_KEY: ${NESSIE_API_KEY:-}
@@ -50,6 +52,8 @@ services:
       context: .
       dockerfile: apps/frontend/Dockerfile
       target: frontend
+    mem_limit: 128m
+    cpus: 0.5
     ports:
       - "127.0.0.1:5173:8080"
     depends_on:

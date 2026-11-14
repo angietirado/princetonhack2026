@@ -72,22 +72,22 @@ The `dashboard-tests` service in the `tools` profile runs the root dashboard's D
 1. An enrolled user sends a direct text to the project's Photon number.
 2. FastAPI verifies the raw request body with the destination's Standard Webhooks secret. It accepts supported text messages only from the configured human sender to the configured agent.
 3. The receiver atomically stores the event, message ID, and queued status in SQLite, then acknowledges receipt. Duplicate events or messages do not create another job.
-4. **Planned:** a worker claims the queued message, resolves the user's customer and conversation context, and invokes the agent coordinator.
-5. **Planned:** the agent chooses a read-only tool and validates its arguments. The tool calculates from the customer's scoped snapshot. A reply writer turns those results into a short answer.
-6. **Planned:** the worker persists the exact reply and its stable idempotency key, calls the existing Photon send primitive, then records acceptance and delivery updates separately.
+4. An explicitly invoked one-job worker claims an eligible message, checks its saved enrollment/data scope, and parses a supported quick command. It does not invoke a model or retain conversational context.
+5. Deterministic tools read the pinned customer's snapshot and prepare a bounded reply for account, summary, or recurring-charge commands. Help and status commands need no financial data read.
+6. The worker persists the exact reply, source hash, and stable idempotency key. An explicit `--send` invocation can submit that reply, with bounded retries for uncertain outcomes. Acceptance is recorded; delivery-status reconciliation remains planned.
 
-The receiver is implemented through step 3. `send_reply()` is available for the future worker but no route invokes it automatically. A Photon API acceptance is not a delivery confirmation. [Photon webhook contract](https://photon.codes/docs/beta/message-delivery/webhook)
+The receiver only queues messages; no route starts an outbound worker automatically. A Photon API acceptance is not a delivery confirmation. See the [worker commands and retry limits](INTEGRATIONS.md#photon-20-beta-quick-controls). [Photon webhook contract](https://photon.codes/docs/beta/message-delivery/webhook)
 
 ## Agent responsibilities and tools
 
-Start with one coordinator and one bounded tool loop. “Analyst” and “reply writer” are logical responsibilities; they do not require independent services or separate model calls for the first demo.
+The question API runs a LangChain advisor with explicit compiled spending and optional local-research specialists through Deep Agents middleware. LangGraph executes the graphs; one request budget covers all model calls, tools, and delegation. Specialists receive only their domain tools. See the [orchestration limits](INTEGRATIONS.md#ai-agents).
 
 | Tool | Input | Result | Current behavior |
 | --- | --- | --- | --- |
 | `get_transactions` | Optional inclusive start/end dates | Normalized transactions | Implemented |
 | `summarize_spending` | Optional inclusive start/end dates | Net spending and category totals | Implemented |
 | `find_recurring_charges` | Optional inclusive start/end dates | Monthly recurring candidates with evidence transaction IDs | Implemented |
-| Compare periods | Two explicit date ranges | Total and category changes | Planned; reuse summary calculations |
+| `compare_spending` | Two explicit nonoverlapping UTC date ranges | Total/category/merchant changes, immutable findings and bounded evidence | Implemented; direct API and Insights form |
 | Explain unusual spending | Date range and comparison window | Observations with evidence and confidence | Planned |
 
 Bind `SpendingTools` to an authorized snapshot before exposing methods to a model. Customer and account scope must come from server context, never from an LLM-provided user ID. The runtime must validate tool arguments, cap execution time and tool rounds, and treat merchant descriptions and message text as data rather than instructions. The application exposes no banking write tool.

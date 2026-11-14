@@ -29,6 +29,7 @@ Use `http://127.0.0.1:8765/docs` or `/openapi.json` for the authoritative schema
 | `/api/v1/transactions` | Array with account, merchant/category, amount, kind, status, and timestamp |
 | `/api/v1/spending/summary` | `{ source, currency, start, end, net_spending_cents, included_count, excluded_count, categories }` |
 | `/api/v1/spending/recurring` | Array of recurring candidates with evidence transaction IDs |
+| `POST /api/v1/spending/compare` | Deterministic comparison of two explicit UTC periods, with source-bound findings and bounded evidence |
 | `GET /api/v1/agent/status` | Availability, selected provider/model, and enabled catalog capability |
 | `POST /api/v1/agent/answer` | Independent question result: status, answer, bounded tool evidence, and limitations |
 | `POST /api/v1/costar/search` | Direct local catalog results for the apartment form's explicit criteria |
@@ -36,6 +37,8 @@ Use `http://127.0.0.1:8765/docs` or `/openapi.json` for the authoritative schema
 The dashboard and spending/transaction routes accept optional `start` and `end` in `YYYY-MM-DD` format. Dates are inclusive and use UTC. Invalid ranges return `422`; upstream failure returns `502`; a missing fixture returns `503`. Categories are `{ category, amount_cents }`, sorted by amount descending. Empty windows return zero totals and empty categories. Net amounts may be negative after refunds. Account balances are current, independent of the selected transaction period.
 
 Format cents with `Intl.NumberFormat`, dividing by 100 at display time. Preserve `source` visibly so fixture data is identified as synthetic. All requests are scoped by the backend; there is no client-supplied customer selector in this single-user scaffold.
+
+**Insights → Compare two periods** works independently of AI. The date shortcut only fills adjacent equal-duration periods; it never submits. The form validates exact returned periods, durations, safe integer changes, and omitted-group reconciliation before displaying results. Zero/negative earlier totals retain undefined percentages. Individual evidence is bounded, while all qualifying records contribute to aggregates. Lock clears the inputs and evidence; refresh/cancellation invalidates pending results. Completion does not move focus away from another view.
 
 **Ask your books** checks availability when opened and submits only an explicit question. It renders model output and exact tool evidence as text. The question body accepts only `question`; include dates and filters in that text because dashboard date controls and earlier questions are not inherited. Date controls appear on spending views, not Ask or account settings. A clarification lists readable input labels and offers **Edit this question**, which restores the original question without submitting it. Each edited question is a fresh request. Source context and evidence stay visible; provider/model, call counts, reserved output tokens (not billed usage), and the source revision appear under **Technical details**.
 

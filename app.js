@@ -28,6 +28,10 @@
   let catalogController = null;
   let catalogTimer = null;
   let catalogPending = false;
+  let comparisonSequence = 0;
+  let comparisonController = null;
+  let comparisonTimer = null;
+  let comparisonPending = false;
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -54,6 +58,7 @@
     });
     const active = document.querySelector('.nav-item[data-view="' + view + '"]');
     $("page-title").textContent = active ? active.getAttribute("aria-label") : "Overview";
+    if (view === "overview" && data && !dashboardLoading) renderMonths();
     const heading = destination.querySelector("h1");
     if (heading && data && !dashboardLoading && !$("dashboard-data").classList.contains("hidden")) {
       heading.setAttribute("tabindex", "-1");
@@ -68,6 +73,7 @@
   function clearData() {
     data = null;
     resetAsk();
+    resetComparison(true);
     $("dashboard-data").classList.add("hidden");
     for (const id of ["balance-value", "balance-foot", "spend-value", "spend-foot", "credit-value", "credit-foot", "gross-total", "refund-note", "largest-category-title", "largest-category-copy", "largest-category-share", "refund-insight", "pending-insight", "uncategorized-insight", "report-total", "report-period", "connection-source", "connection-customer", "connection-time", "transaction-count", "page-count", "period-caption", "overview-subheading"]) $(id).textContent = "";
     for (const id of ["category-legend", "monthly-chart", "recent-activity", "coverage-details", "transaction-rows", "recurring-list", "report-categories", "accounts-list"]) $(id).replaceChildren();
@@ -100,6 +106,7 @@
     const requestId = ++sequence;
     dashboardLoading = true;
     resetAsk();
+    resetComparison();
     controller?.abort();
     controller = new AbortController();
     $("refresh-button").disabled = true;
@@ -183,6 +190,7 @@
     $("ask-needed-inputs").replaceChildren();
   }
   function updateAskControls() {
+    updateComparisonControls();
     const idle = Boolean(data && !dashboardLoading && !askStatusLoading && !askPending && !catalogPending);
     const ready = idle && askStatus?.enabled;
     $("ask-question").disabled = !ready;
@@ -435,12 +443,16 @@
   function renderToolEvidence(entry, directRequest = false) {
     const result = entry.result;
     const host = node("article", undefined, "ask-evidence-item");
-    const titles = { summarize_spending: "Observed spending", get_transactions: "Transaction records", find_recurring_charges: "Recurring candidates", costar_search: "Apartment matches" };
+    const titles = { summarize_spending: "Observed spending", compare_spending: "Period comparison", get_transactions: "Transaction records", find_recurring_charges: "Recurring candidates", costar_search: "Apartment matches" };
     host.append(node("h4", Object.hasOwn(titles, entry.tool) ? titles[entry.tool] : label(entry.tool)));
     if (result.status !== "ok") {
       host.append(node("p", "This read did not return usable evidence. No zero total or empty-market conclusion follows."));
     } else if (entry.tool === "summarize_spending" && Number.isSafeInteger(result.net_spending_cents)) {
       host.append(node("p", "Observed net spending: " + money(result.net_spending_cents) + ". History completeness is unknown."));
+    } else if (entry.tool === "compare_spending" && validComparison(result, entry.arguments)) {
+      host.append(node("p", "Observed net spending: " + money(result.total.baseline_cents) + " → " + money(result.total.current_cents) + "; change " + money(result.total.delta_cents) + "."));
+      for (const finding of result.findings) host.append(node("p", finding.text));
+      for (const caveat of result.caveats) host.append(node("p", caveat, "chart-note"));
     } else if (entry.tool === "get_transactions") {
       host.append(node("p", result.returned_rows + " of " + result.total_rows + " matching observed records returned. Signed contributions and excluded records are in the details."));
     } else if (entry.tool === "find_recurring_charges") {
@@ -540,6 +552,157 @@
     }
   });
 
+  function updateComparisonControls() {
+    const ready = Boolean(data && !dashboardLoading && !comparisonPending);
+    for (const id of ["comparison-baseline-start", "comparison-baseline-end", "comparison-current-start", "comparison-current-end", "comparison-submit"]) $(id).disabled = !ready;
+    $("comparison-use-period").disabled = !ready || !data?.summary?.start || !data?.summary?.end;
+    $("comparison-cancel").classList.toggle("hidden", !comparisonPending);
+    $("comparison-form").setAttribute("aria-busy", String(comparisonPending));
+    $("comparison-submit").textContent = comparisonPending ? "Comparing…" : "Compare periods";
+  }
+  function resetComparison(clearInputs = false) {
+    comparisonSequence += 1;
+    comparisonController?.abort();
+    clearTimeout(comparisonTimer);
+    comparisonController = null;
+    comparisonPending = false;
+    $("comparison-result").classList.add("hidden");
+    for (const id of ["comparison-state", "comparison-error", "comparison-period-label", "comparison-source", "comparison-evidence"]) $(id).textContent = "";
+    for (const id of ["comparison-totals", "comparison-findings", "comparison-categories", "comparison-merchants", "comparison-caveats"]) $(id).replaceChildren();
+    $("comparison-details").open = false;
+    if (clearInputs) $("comparison-form").reset();
+    updateComparisonControls();
+  }
+  function calendarDay(text) {
+    if (typeof text !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(text) || Number(text.slice(0, 4)) < 1) return false;
+    const parsed = new Date(text + "T00:00:00Z");
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text;
+  }
+  function validPeriods(value) {
+    return object(value) && ["baseline", "current"].every((key) => object(value[key]) && calendarDay(value[key].start) && calendarDay(value[key].end) && value[key].start <= value[key].end) && value.baseline.end < value.current.start;
+  }
+  function validComparison(result, expected) {
+    const change = (row) => {
+      if (!object(row) || !["baseline_cents", "current_cents", "delta_cents"].every((key) => Number.isSafeInteger(row[key]))) return false;
+      if (BigInt(row.current_cents) - BigInt(row.baseline_cents) !== BigInt(row.delta_cents)) return false;
+      if (row.baseline_cents <= 0) return row.percent_change_bps === null && row.percent_status === (row.baseline_cents === 0 ? "zero_baseline" : "negative_baseline");
+      if (row.percent_status !== "defined" || !Number.isSafeInteger(row.percent_change_bps)) return false;
+      const numerator = BigInt(row.delta_cents) * 10000n;
+      const denominator = BigInt(row.baseline_cents);
+      const magnitude = numerator < 0n ? -numerator : numerator;
+      // Match the server's ROUND_HALF_UP without losing cents in intermediate arithmetic.
+      const rounded = (magnitude * 2n + denominator) / (2n * denominator);
+      return BigInt(row.percent_change_bps) === (numerator < 0n ? -rounded : rounded);
+    };
+    if (!object(result) || result.status !== "ok" || result.calculation_version !== "spending-comparison-v1" || result.currency !== "USD" || result.coverage !== "observed_records_only" || !validPeriods(expected) || !validPeriods(result) || !change(result.total)) return false;
+    if (!["source_hash", "comparison_id"].every((key) => typeof result[key] === "string" && /^[a-f0-9]{64}$/.test(result[key])) || typeof result.source !== "string" || result.source.length > 256) return false;
+    for (const key of ["baseline", "current"]) {
+      const period = result[key];
+      if (period.start !== expected[key].start || period.end !== expected[key].end || !Number.isSafeInteger(period.duration_days) || period.duration_days < 1 || period.net_spending_cents !== result.total[key + "_cents"]) return false;
+      if (period.duration_days !== Math.round((new Date(period.end + "T00:00:00Z") - new Date(period.start + "T00:00:00Z")) / 86400000) + 1) return false;
+    }
+    if (result.equal_duration !== (result.baseline.duration_days === result.current.duration_days)) return false;
+    for (const key of ["categories", "merchants"]) {
+      const group = result[key];
+      if (!object(group) || !Array.isArray(group.rows) || group.rows.length > 10 || !group.rows.every((row) => change(row) && typeof row.label === "string" && row.label.length <= 300)) return false;
+      if (!Number.isSafeInteger(group.omitted_groups) || group.omitted_groups < 0) return false;
+      for (const metric of ["baseline_cents", "current_cents", "delta_cents"]) {
+        if (!Number.isSafeInteger(group["omitted_" + metric]) || group.rows.reduce((sum, row) => sum + BigInt(row[metric]), BigInt(group["omitted_" + metric])) !== BigInt(result.total[metric])) return false;
+      }
+    }
+    return Array.isArray(result.findings) && result.findings.length <= 5 && result.findings.every((row) => object(row) && typeof row.text === "string" && row.text.length <= 1600) && Array.isArray(result.caveats) && result.caveats.length <= 20 && result.caveats.every((item) => typeof item === "string" && item.length <= 1000) && JSON.stringify(result).length <= 64000;
+  }
+  $("comparison-use-period").addEventListener("click", () => {
+    if ($("comparison-use-period").disabled) return;
+    resetComparison();
+    const current = { start: data.summary.start, end: data.summary.end };
+    const start = new Date(current.start + "T00:00:00Z");
+    const end = new Date(current.end + "T00:00:00Z");
+    const days = Math.round((end - start) / 86400000) + 1;
+    if (!calendarDay(current.start) || !calendarDay(current.end) || days < 1) return;
+    const baseline = { start: isoDay(new Date(start.getTime() - days * 86400000)), end: isoDay(new Date(start.getTime() - 86400000)) };
+    if (!validPeriods({ baseline, current })) return;
+    for (const [key, value] of Object.entries({ baseline, current })) for (const edge of ["start", "end"]) $("comparison-" + key + "-" + edge).value = value[edge];
+    $("comparison-error").textContent = "";
+    $("comparison-state").textContent = "Dates filled. Review both periods, then choose Compare periods.";
+  });
+  $("comparison-cancel").addEventListener("click", () => {
+    if (!comparisonPending) return;
+    resetComparison();
+    $("comparison-state").textContent = "Stopped waiting. No comparison was accepted; the server may finish processing.";
+    if (!$("insights-view").classList.contains("hidden") && data && !dashboardLoading) $("comparison-submit").focus();
+  });
+  function renderComparison(result) {
+    $("comparison-period-label").textContent = "Earlier: " + result.baseline.start + " through " + result.baseline.end + " (" + result.baseline.duration_days + " days). Later: " + result.current.start + " through " + result.current.end + " (" + result.current.duration_days + " days). Inclusive UTC dates.";
+    const total = result.total;
+    for (const [title, value] of [["Earlier net spending", total.baseline_cents], ["Later net spending", total.current_cents], ["Change in net spending", total.delta_cents]]) {
+      const card = node("div", undefined, "comparison-total");
+      card.append(node("p", title), node("strong", money(value)));
+      $("comparison-totals").append(card);
+    }
+    const percent = total.percent_status === "defined" ? "Total change: " + (total.percent_change_bps / 100).toFixed(2) + "%." : "A percentage change is undefined because the earlier net total is " + (total.percent_status === "zero_baseline" ? "zero." : "negative.");
+    $("comparison-totals").append(node("p", percent, "chart-note"));
+    for (const finding of result.findings) $("comparison-findings").append(node("li", finding.text));
+    for (const key of ["categories", "merchants"]) {
+      const group = result[key];
+      if (!group.rows.length) $("comparison-" + key).append(node("p", "No included records in these observed periods.", "chart-note"));
+      for (const row of group.rows) {
+        const element = node("div", undefined, "ask-record");
+        element.append(node("strong", row.label + (row.label_truncated ? "…" : "")), node("p", money(row.baseline_cents) + " → " + money(row.current_cents) + "; change " + money(row.delta_cents) + "."));
+        $("comparison-" + key).append(element);
+      }
+      if (group.omitted_groups) $("comparison-" + key).append(node("p", group.omitted_groups + " more groups, with combined change " + money(group.omitted_delta_cents) + ". All groups are included in the total.", "chart-note"));
+    }
+    for (const caveat of result.caveats) $("comparison-caveats").append(node("li", caveat));
+    $("comparison-source").textContent = "Source: " + result.source + " · Revision: " + result.source_hash;
+    $("comparison-evidence").textContent = JSON.stringify(result, null, 2);
+    $("comparison-result").classList.remove("hidden");
+  }
+  $("comparison-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!data || dashboardLoading || comparisonPending) return;
+    const periods = {};
+    for (const key of ["baseline", "current"]) periods[key] = Object.freeze({ start: $("comparison-" + key + "-start").value, end: $("comparison-" + key + "-end").value });
+    if (!validPeriods(periods)) { resetComparison(); $("comparison-error").textContent = "Choose valid dates for both periods. The earlier period must finish before the later period starts."; return; }
+    Object.freeze(periods);
+    resetComparison();
+    const requestId = comparisonSequence;
+    comparisonPending = true;
+    comparisonController = new AbortController();
+    $("comparison-state").textContent = "Calculating changes from observed records…";
+    updateComparisonControls();
+    comparisonTimer = setTimeout(() => {
+      if (requestId !== comparisonSequence) return;
+      resetComparison();
+      $("comparison-error").textContent = "The comparison timed out. No result was accepted; you can try again.";
+    }, 50000);
+    let completion = "";
+    try {
+      const response = await fetch("/api/v1/spending/compare", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify(periods), cache: "no-store", redirect: "error", signal: comparisonController.signal });
+      if (requestId !== comparisonSequence) return;
+      if (response.status === 401) { lock(); $("access-error").textContent = "Unlock with a valid app token to compare spending."; return; }
+      if (!response.ok) {
+        $("comparison-error").textContent = ({ 422: "The date ranges were rejected. Review both periods.", 429: "Another comparison is running. Wait briefly before trying again.", 503: "Observed data is unavailable for this comparison.", 504: "The comparison reached its time limit." })[response.status] || "The comparison could not be completed. No result was accepted.";
+        return;
+      }
+      const result = await response.json();
+      if (requestId !== comparisonSequence) return;
+      if (!validComparison(result, periods)) throw new Error("invalid comparison");
+      renderComparison(result);
+      completion = "Comparison ready. Review the exact totals, contributions and data limitations below.";
+    } catch (error) {
+      if (requestId !== comparisonSequence || error.name === "AbortError") return;
+      $("comparison-error").textContent = "A valid comparison matching your periods could not be received. No result was accepted.";
+    } finally {
+      if (requestId === comparisonSequence) {
+        clearTimeout(comparisonTimer);
+        comparisonPending = false;
+        $("comparison-state").textContent = completion;
+        updateComparisonControls();
+      }
+    }
+  });
+
   function renderCategories() {
     const all = data.expense_categories;
     const categories = all.length > 6 ? all.slice(0, 5).concat([{ category: "Other categories", amount_cents: all.slice(5).reduce((sum, item) => sum + item.amount_cents, 0) }]) : all;
@@ -574,6 +737,7 @@
     return element;
   }
   function renderMonths() {
+    if (!data || $("overview-view").classList.contains("hidden")) return;
     const host = $("monthly-chart");
     host.replaceChildren();
     const months = data.monthly_spending;

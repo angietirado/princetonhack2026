@@ -7,16 +7,16 @@ cannot choose customers, files, URLs, credentials, or mutation operations.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from spending_api.agent_tools import SPENDING_KINDS, SpendingTools
+from spending_api.agent_tools import SPENDING_KINDS, SpendingTools, bind_snapshot
+from spending_api.comparison import ComparisonRequest, compare_bound_spending, compare_spending
 from spending_api.config import Settings
 from spending_api.costar import CostarSearchCriteria
 from spending_api.models import DateRange
@@ -166,31 +166,15 @@ def create_provider_model(settings: Settings):
 
 
 def _bound_tools(tools: SpendingTools) -> tuple[SpendingTools, str]:
-    """Defensive snapshot, single-customer scope, and UTC normalization."""
-    snapshot = tools.snapshot.model_copy(deep=True)
-    accounts = [row.id for row in snapshot.accounts]
-    tx_ids = [row.id for row in snapshot.transactions]
-    customers = {row.customer_id for row in snapshot.accounts}
-    if (
-        len(set(accounts)) != len(accounts)
-        or len(set(tx_ids)) != len(tx_ids)
-        or any(not value for value in accounts + tx_ids)
-        or len(customers) > 1
-        or "" in customers
-        or any(row.account_id not in set(accounts) for row in snapshot.transactions)
-    ):
-        raise ValueError("Snapshot has invalid customer scope or duplicate identities")
-    for tx in snapshot.transactions:
-        if tx.occurred_at.tzinfo is None or tx.occurred_at.utcoffset() is None:
-            raise ValueError("Snapshot timestamps must include a timezone")
-        tx.occurred_at = tx.occurred_at.astimezone(UTC)
-    encoded = json.dumps(snapshot.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-    return SpendingTools(snapshot), hashlib.sha256(encoded.encode()).hexdigest()
+    """Compatibility entry point shared by existing Photon callers."""
+    return bind_snapshot(tools)
 
 
 def _read_tools(
     bound: SpendingTools,
     catalog: CostarCatalog | None,
+    *,
+    source_hash: str | None = None,
 ):
     from langchain_core.tools import StructuredTool
 
@@ -245,6 +229,15 @@ def _read_tools(
             "affect candidates. No confirmed subscriptions, savings, or next-bill forecast.",
         }
 
+    def compare(baseline, current):
+        request = ComparisonRequest(baseline=baseline, current=current)
+        result = (
+            compare_bound_spending(bound, request, source_hash)
+            if source_hash is not None
+            else compare_spending(bound, request)
+        )
+        return result.model_dump(mode="json")
+
     result = [
         StructuredTool.from_function(
             summarize,
@@ -263,6 +256,14 @@ def _read_tools(
             name="find_recurring_charges",
             args_schema=WindowQuery,
             description="Find candidate monthly charges, not confirmed subscriptions or savings.",
+        ),
+        StructuredTool.from_function(
+            compare,
+            name="compare_spending",
+            args_schema=ComparisonRequest,
+            description="Compare two explicit nonoverlapping UTC date windows; baseline must "
+            "precede current. Returns integer-cent changes, bounded evidence and deterministic "
+            "finding text. Preserve dates; ask the advisor to clarify missing periods.",
         ),
     ]
     if catalog is not None:
@@ -527,7 +528,7 @@ def _build_advisor(model, bound: SpendingTools, catalog: CostarCatalog | None, b
     from langchain_core.tools import StructuredTool
 
     chat = _chat_model(model)
-    reads = _read_tools(bound, catalog)
+    reads = _read_tools(bound, catalog, source_hash=budget.source_hash)
     groups = {"spending": [tool for tool in reads if tool.name != "costar_search"]}
     if catalog is not None:
         groups["research"] = [tool for tool in reads if tool.name == "costar_search"]

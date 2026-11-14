@@ -164,6 +164,7 @@ def test_summary_exact_raw_arithmetic_and_evidence_roundtrip():
         "summarize_spending",
         "get_transactions",
         "find_recurring_charges",
+        "compare_spending",
     }
 
 
@@ -462,7 +463,12 @@ def test_actual_langchain_fake_model_and_ambient_tracing_disabled(monkeypatch):
             names = {tool.name for tool in tools}
             assert names in (
                 {"task", "write_todos", "request_clarification"},
-                {"summarize_spending", "get_transactions", "find_recurring_charges"},
+                {
+                    "summarize_spending",
+                    "get_transactions",
+                    "find_recurring_charges",
+                    "compare_spending",
+                },
             )
             return self
 
@@ -827,3 +833,109 @@ def test_spending_child_cannot_access_catalog_tool():
     model.role = "spending"
     answer = run(model, catalog=Catalog())
     assert answer.status == "unavailable" and answer.evidence == []
+
+
+def test_comparison_runs_only_through_spending_child_with_trusted_findings():
+    model = ScriptedModel(
+        AIMessage(
+            content="",
+            tool_calls=[
+                call(
+                    "compare_spending",
+                    {
+                        "baseline": {"start": "2026-10-01", "end": "2026-10-31"},
+                        "current": {"start": "2026-11-01", "end": "2026-11-01"},
+                    },
+                )
+            ],
+        ),
+        AIMessage(
+            content="The deterministic comparison has an undefined zero-baseline percentage."
+        ),
+    )
+    answer = run(model)
+    assert answer.status == "answered"
+    evidence = answer.evidence[0]
+    assert evidence["role"] == "spending" and evidence["tool"] == "compare_spending"
+    assert evidence["result"]["source_hash"] == evidence["source_hash"] == answer.source_hash
+    assert evidence["result"]["total"]["delta_cents"] == 1600
+    assert evidence["result"]["total"]["percent_change_bps"] is None
+    assert evidence["result"]["findings"][0]["text"].startswith("Observed net spending increased")
+
+
+def test_invalid_comparison_prevents_other_read_in_same_batch(monkeypatch):
+    monkeypatch.setattr(
+        SpendingTools, "summarize_spending", lambda *_: pytest.fail("must not read")
+    )
+    model = ScriptedModel(
+        AIMessage(
+            content="",
+            tool_calls=[
+                call(call_id="summary"),
+                call(
+                    "compare_spending",
+                    {
+                        "baseline": {"start": "2026-11-01", "end": "2026-11-30"},
+                        "current": {"start": "2026-11-01", "end": "2026-11-30"},
+                    },
+                    "invalid-comparison",
+                ),
+            ],
+        )
+    )
+    answer = run(model)
+    assert answer.status == "unavailable" and answer.tool_calls == 1 and not answer.evidence
+
+
+def test_research_child_cannot_call_spending_comparison():
+    model = ScriptedModel(
+        AIMessage(
+            content="",
+            tool_calls=[
+                call(
+                    "compare_spending",
+                    {
+                        "baseline": {"start": "2026-10-01", "end": "2026-10-31"},
+                        "current": {"start": "2026-11-01", "end": "2026-11-30"},
+                    },
+                )
+            ],
+        )
+    )
+    model.role = "research"
+    answer = run(model, catalog=SimpleNamespace(search=lambda *_: pytest.fail("must not read")))
+    assert answer.status == "unavailable" and not answer.evidence
+
+
+@pytest.mark.parametrize("provider", ["gemini", "nemotron"])
+def test_comparison_nested_schema_reaches_provider_request_without_network(provider, monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    importlib.import_module(
+        "langchain_google_genai" if provider == "gemini" else "langchain_nvidia_ai_endpoints"
+    )
+    monkeypatch.setattr(socket.socket, "connect", lambda *_: pytest.fail("unexpected network"))
+    monkeypatch.setattr(socket, "create_connection", lambda *_: pytest.fail("unexpected network"))
+    model = create_provider_model(config(llm_provider=provider))
+    binding = model.bind_tools(_read_tools(SpendingTools(snapshot()), None))
+    messages = [HumanMessage(content="Compare two explicitly provided periods")]
+    if provider == "gemini":
+        request = model._prepare_request(messages, **binding.kwargs)
+        functions = [
+            declaration.model_dump(mode="json", exclude_none=True)
+            for tool in request["config"].tools
+            for declaration in tool.function_declarations
+        ]
+    else:
+        _, payload, _ = model._prepare_inputs_and_payload(messages, **binding.kwargs)
+        functions = [tool["function"] for tool in payload["tools"]]
+    parameters = next(row for row in functions if row["name"] == "compare_spending")["parameters"]
+    assert set(parameters["properties"]) == {"baseline", "current"}
+    assert set(parameters["required"]) == {"baseline", "current"}
+    for period in ("baseline", "current"):
+        schema = parameters["properties"][period]
+        assert schema["type"].lower() == "object"
+        assert set(schema["properties"]) == {"start", "end"}
+        assert set(schema["required"]) == {"start", "end"}
+    serialized = json.dumps(parameters)
+    assert '"$ref"' not in serialized and '"$defs"' not in serialized

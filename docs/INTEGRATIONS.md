@@ -86,6 +86,18 @@ docker compose --env-file .env -p princeton-langchain-20261114 exec -T backend p
 
 Retain the two catalog `-f` flags if that is your running project. These commands use the running container's configured credentials and data source. There is no background polling loop. The worker persists the exact reply, source hash, body hash, and stable project/message idempotency key before a send. Leases coordinate competing invocations. Uncertain transport/5xx/429 outcomes reuse that body/key with backoff, at most three attempts within ten minutes of preparation; exhausted outcomes remain `uncertain`. Scope changes and legacy inbox rows without a scope binding are blocked. An API 202 is acceptance, not proof of phone delivery. No indefinite exactly-once guarantee or delivery-status webhook reconciliation is claimed.
 
+## Deterministic comparisons
+
+`POST /api/v1/spending/compare` authenticates before parsing, limits JSON bodies to 8192 bytes, and accepts only `baseline` and `current`, each with required ISO `start`/`end` dates. The earlier period must finish before the later begins. The endpoint binds the configured customer's snapshot, normalizes timestamps to UTC, and computes all totals without a model. It accepts no customer, source, path, or provider override. One comparison runs per worker, with a 45-second HTTP deadline and no automatic retry. If a started native calculation outlasts its caller, new comparisons remain busy until that calculation finishes. Shutdown closes admission and drains owned work; cancellation of an HTTP request does not prove that its worker stopped.
+
+The response includes gross expenses, refunds, net amounts, included/excluded counts, inclusive durations, and signed current-minus-baseline changes. Percentage change is an integer number of basis points, rounded half-up, only for a positive baseline; divide by 100 to display a percentage. Zero and negative baselines have explicit undefined-percentage statuses. Every category and merchant group contributes to totals, even when the bounded display omits it. Missing merchant IDs form an explicitly unidentified bucket; matching labels do not establish identity.
+
+The 24,000-byte UTF-8 result ceiling includes at most ten groups per breakdown, twenty individual transaction evidence rows, and five deterministic findings. Source hashes are stable under record ordering and equivalent UTC timestamps. The comparison ID binds that source hash, both exact windows, and the calculation version. Evidence truncation never truncates arithmetic.
+
+`validate_finding_assertion` accepts a restricted identity/direction proposal against an already computed server comparison and returns its immutable finding. It rejects mismatched sources, windows, versions, findings, assertions, and extra fields. This internal validator does not authenticate arbitrary client-supplied comparison JSON or prove free-form model prose. The direct UI renders application-generated factual findings; AI interpretation remains separately labeled.
+
+The Insights form checks the calculation version, returned periods, durations, safe integer amounts, exact deltas and rounded percentages, and group reconciliation before rendering. Intermediate arithmetic uses `BigInt` to avoid losing cents when individually safe integers are added. Cancel, refresh, lock, or a deadline discards late responses. A browser cancellation does not guarantee cancellation of server work already in progress.
+
 ## AI agents
 
 The selected framework is LangChain with `langchain-google-genai` for Gemini and `langchain-nvidia-ai-endpoints` for hosted NVIDIA Nemotron. Packages and transitive dependencies are locked in `uv.lock`. There is no automatic fallback between providers.

@@ -10,6 +10,295 @@ const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
 const response = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => structuredClone(body) });
 const tick = async () => { for (let i = 0; i < 4; i++) await new Promise(setImmediate); };
 
+function comparisonPeriods() {
+  return { baseline: { start: "2026-11-01", end: "2026-11-07" }, current: { start: "2026-11-08", end: "2026-11-14" } };
+}
+function comparisonResponse(periods = comparisonPeriods()) {
+  const total = { baseline_cents: 2500, current_cents: 4500, delta_cents: 2000, percent_change_bps: 8000, percent_status: "defined" };
+  const stats = (period, gross, refunds) => ({ ...period, duration_days: Math.round((new Date(period.end) - new Date(period.start)) / 86400000) + 1, gross_spending_cents: gross, refunds_cents: refunds, net_spending_cents: gross - refunds, observed_count: 2, included_count: 2, excluded_count: 0 });
+  const section = (name, identity, key) => ({ rows: [{ ...total, key, label: name, label_truncated: false, identity_kind: identity }], total_groups: 1, omitted_groups: 0, omitted_baseline_cents: 0, omitted_current_cents: 0, omitted_delta_cents: 0 });
+  const baseline = stats(periods.baseline, 3000, 500), current = stats(periods.current, 5500, 1000);
+  const categoryKey = "c".repeat(64), merchantKey = "d".repeat(64);
+  const evidence = [["baseline", "purchase", 3000], ["baseline", "refund", -500], ["current", "purchase", 5500], ["current", "refund", -1000]].map(([period, kind, amount]) => ({ id: period + "-" + kind, period, occurred_at: periods[period].start + "T12:00:00Z", category_key: categoryKey, merchant_key: merchantKey, signed_spending_cents: amount }));
+  return { status: "ok", comparison_id: "b".repeat(64), calculation_version: "spending-comparison-v1", source: "fixture", source_hash: "a".repeat(64), currency: "USD", coverage: "observed_records_only", baseline, current, equal_duration: baseline.duration_days === current.duration_days, total, categories: section("Dining", "category", categoryKey), merchants: section("Cafe", "merchant_id", merchantKey), findings: [{ finding_id: "e".repeat(64), scope: "total", group_key: null, assertion: "increased", joint_largest: false, text: "Observed net spending increased by $20.00 USD." }], caveats: ["Observed records only; completeness is unknown."], transaction_evidence: evidence, evidence_summary: { eligible_count: 4, returned_count: 4, omitted_count: 0, baseline_returned: 2, current_returned: 2, truncated: false } };
+}
+function fillComparison(app, periods = comparisonPeriods()) {
+  for (const key of ["baseline", "current"]) for (const edge of ["start", "end"]) app.change("comparison-" + key + "-" + edge, periods[key][edge]);
+}
+
+test("comparison submits exact explicit periods with memory auth and no model call", async (t) => {
+  const app = boot(t, (url, options) => {
+    if (options.headers.Authorization !== "Bearer comparison-token") return response({}, 401);
+    return url === "/api/v1/spending/compare" ? response(comparisonResponse(JSON.parse(options.body))) : response(payload());
+  });
+  await tick(); app.get("app-token").value = "comparison-token"; app.submit("access-form"); await tick();
+  const before = app.calls.length;
+  fillComparison(app);
+  assert.equal(app.calls.length, before);
+  app.submit("comparison-form"); await tick();
+  const request = app.calls.at(-1);
+  assert.equal(request.url, "/api/v1/spending/compare");
+  assert.deepEqual(JSON.parse(request.options.body), comparisonPeriods());
+  assert.equal(request.options.cache, "no-store");
+  assert.equal(request.options.redirect, "error");
+  assert.match(app.get("comparison-totals").textContent, /\$25\.00.*\$45\.00.*\$20\.00.*80\.00%/);
+  assert.match(app.get("comparison-findings").textContent, /Observed net spending increased/);
+  assert.match(app.get("comparison-state").textContent, /Comparison ready/);
+  assert.equal(app.get("comparison-details").open, false);
+  assert.equal(app.calls.some((call) => call.url.includes("agent")), false);
+  assert.equal(app.window.localStorage.length + app.window.sessionStorage.length, 0);
+});
+
+test("displayed-period shortcut fills adjacent equal periods without a request", async (t) => {
+  const app = boot(t); await tick();
+  const before = app.calls.length;
+  app.click("comparison-use-period");
+  assert.equal(app.get("comparison-current-start").value, "2026-10-01");
+  assert.equal(app.get("comparison-current-end").value, "2026-11-14");
+  assert.equal(app.get("comparison-baseline-start").value, "2026-08-17");
+  assert.equal(app.get("comparison-baseline-end").value, "2026-09-30");
+  assert.equal(app.calls.length, before);
+  assert.match(app.get("comparison-state").textContent, /Dates filled/);
+});
+
+test("comparison rejects invalid or overlapping dates before a read", async (t) => {
+  const app = boot(t); await tick();
+  for (const periods of [{ baseline: { start: "", end: "" }, current: comparisonPeriods().current },
+    { ...comparisonPeriods(), baseline: { start: "2026-11-07", end: "2026-11-01" } },
+    { ...comparisonPeriods(), current: { start: "2026-11-07", end: "2026-11-14" } }]) {
+    fillComparison(app, periods); app.submit("comparison-form"); await tick();
+    assert.match(app.get("comparison-error").textContent, /Choose valid dates/);
+    assert.equal(app.calls.length, 1);
+  }
+});
+
+test("comparison rejects mismatched periods and inconsistent financial totals", async (t) => {
+  let mutate;
+  const app = boot(t, (url) => {
+    if (url !== "/api/v1/spending/compare") return response(payload());
+    const value = comparisonResponse(); mutate(value); return response(value);
+  });
+  await tick(); fillComparison(app);
+  for (mutate of [
+    (r) => { r.current.start = "2026-11-09"; }, (r) => { r.total.delta_cents = 1; },
+    (r) => { r.merchants.omitted_current_cents = 1; }, (r) => { r.source_hash = "bad"; },
+    (r) => { r.total.current_cents = 1.5; }, (r) => { r.current.duration_days = 1; },
+  ]) {
+    app.submit("comparison-form"); await tick();
+    assert.match(app.get("comparison-error").textContent, /valid comparison matching your periods/);
+    assert.equal(app.get("comparison-result").classList.contains("hidden"), true);
+  }
+});
+
+test("comparison rejects percentages inconsistent with positive baseline and delta", async (t) => {
+  let mutate;
+  const app = boot(t, (url) => {
+    if (url !== "/api/v1/spending/compare") return response(payload());
+    const value = comparisonResponse(); mutate(value); return response(value);
+  });
+  await tick(); fillComparison(app);
+  // Independently: (4500 - 2500) / 2500 * 100 = 80%, or 8000 basis points.
+  for (mutate of [
+    (r) => { r.total.percent_change_bps = 1; },
+    (r) => { r.categories.rows[0].percent_change_bps = -8000; },
+    (r) => { r.merchants.rows[0].percent_change_bps = 8001; },
+  ]) {
+    app.submit("comparison-form"); await tick();
+    assert.equal(app.get("comparison-result").classList.contains("hidden"), true);
+    assert.match(app.get("comparison-error").textContent, /valid comparison matching your periods/);
+  }
+});
+
+test("comparison preserves exact positive and negative half-up percentage ties", async (t) => {
+  let delta = -1;
+  const app = boot(t, (url) => {
+    if (url !== "/api/v1/spending/compare") return response(payload());
+    const value = comparisonResponse();
+    const total = { baseline_cents: 20000, current_cents: 20000 + delta, delta_cents: delta, percent_change_bps: delta, percent_status: "defined" };
+    value.total = total;
+    value.baseline.net_spending_cents = value.baseline.gross_spending_cents = 20000; value.baseline.refunds_cents = 0;
+    value.current.net_spending_cents = value.current.gross_spending_cents = 20000 + delta; value.current.refunds_cents = 0;
+    for (const key of ["categories", "merchants"]) Object.assign(value[key].rows[0], total);
+    value.transaction_evidence.forEach((row) => { row.signed_spending_cents = row.id.endsWith("refund") ? 0 : row.period === "baseline" ? 20000 : 20000 + delta; });
+    value.findings[0].assertion = delta < 0 ? "decreased" : "increased";
+    value.findings[0].text = "Observed net spending changed by one cent.";
+    return response(value);
+  });
+  await tick(); fillComparison(app);
+  for (delta of [-1, 1]) {
+    app.submit("comparison-form"); await tick();
+    assert.equal(app.get("comparison-result").classList.contains("hidden"), false);
+    assert.match(app.get("comparison-totals").textContent, delta < 0 ? /-0\.01%/ : /Total change: 0\.01%/);
+  }
+});
+
+test("comparison rejects group sums hidden by floating point cancellation", async (t) => {
+  const value = comparisonResponse();
+  const total = { baseline_cents: 1, current_cents: 1, delta_cents: 0, percent_change_bps: 0, percent_status: "defined" };
+  value.total = total; value.baseline.net_spending_cents = value.current.net_spending_cents = 1;
+  Object.assign(value.merchants.rows[0], total);
+  value.categories.rows = [Number.MAX_SAFE_INTEGER, 2, -Number.MAX_SAFE_INTEGER].map((amount, index) => ({ ...value.categories.rows[0], key: String(index), baseline_cents: amount, current_cents: amount, delta_cents: 0, percent_change_bps: amount > 0 ? 0 : null, percent_status: amount > 0 ? "defined" : "negative_baseline" }));
+  value.categories.total_groups = 3;
+  const app = boot(t, (url) => response(url === "/api/v1/spending/compare" ? value : payload()));
+  await tick(); fillComparison(app); app.submit("comparison-form"); await tick();
+  // These three exact integer groups total 2 cents, never the claimed 1 cent.
+  assert.equal(app.get("comparison-result").classList.contains("hidden"), true);
+  assert.match(app.get("comparison-error").textContent, /valid comparison matching your periods/);
+});
+
+test("comparison preserves undefined percentages, omitted groups and text safety", async (t) => {
+  const value = comparisonResponse();
+  const zero = { ...value.total, baseline_cents: 0, current_cents: 1000, delta_cents: 1000, percent_change_bps: null, percent_status: "zero_baseline" };
+  value.total = zero; value.baseline.net_spending_cents = 0; value.current.net_spending_cents = 1000;
+  for (const key of ["categories", "merchants"]) value[key] = { rows: [{ ...zero, label: '<img src=x onerror="alert(1)">', label_truncated: true }], omitted_groups: 2, omitted_baseline_cents: 0, omitted_current_cents: 0, omitted_delta_cents: 0 };
+  value.findings = [{ text: "Observed total from an empty baseline; missing history is unknown." }];
+  const app = boot(t, (url) => response(url === "/api/v1/spending/compare" ? value : payload()));
+  await tick(); fillComparison(app); app.submit("comparison-form"); await tick();
+  assert.match(app.get("comparison-totals").textContent, /percentage change is undefined.*zero/);
+  assert.match(app.get("comparison-merchants").textContent, /2 more groups/);
+  assert.equal(app.get("comparison-result").querySelector("img"), null);
+});
+
+for (const action of ["refresh", "lock", "cancel"]) {
+  test("late comparison JSON cannot restore discarded records after " + action, async (t) => {
+    let finish;
+    const app = boot(t, (url) => url === "/api/v1/spending/compare" ? { ok: true, status: 200, json: () => new Promise((resolve) => { finish = resolve; }) } : response(payload()));
+    await tick(); fillComparison(app); app.submit("comparison-form"); await tick();
+    const request = app.calls.at(-1), count = app.calls.length;
+    app.submit("comparison-form"); assert.equal(app.calls.length, count);
+    app.click(action === "cancel" ? "comparison-cancel" : action === "lock" ? "lock-button" : "refresh-button");
+    await tick(); assert.equal(request.options.signal.aborted, true);
+    finish(comparisonResponse()); await tick();
+    assert.equal(app.get("comparison-result").classList.contains("hidden"), true);
+    assert.equal(app.get("comparison-evidence").textContent, "");
+    if (action === "lock") assert.equal(app.get("comparison-current-start").value, "");
+  });
+}
+
+test("comparison errors and deadline do not retry or retain prior results", async (t) => {
+  let code = 503;
+  const timers = [];
+  let finish;
+  const app = boot(t, (url) => url === "/api/v1/spending/compare" ? code ? response({ detail: "private error" }, code) : new Promise((resolve) => { finish = resolve; }) : response(payload()));
+  await tick(); fillComparison(app);
+  for (code of [422, 429, 503, 504, 500]) {
+    const count = app.calls.length; app.submit("comparison-form"); await tick();
+    assert.equal(app.calls.length, count + 1);
+    assert.doesNotMatch(app.get("comparison-error").textContent, /private/);
+  }
+  app.window.setTimeout = (fn, milliseconds) => { timers.push({ fn, milliseconds }); return timers.length; };
+  code = 0; app.submit("comparison-form");
+  const request = app.calls.at(-1);
+  timers.find((timer) => timer.milliseconds === 50000).fn();
+  assert.equal(request.options.signal.aborted, true);
+  assert.equal(app.get("comparison-submit").disabled, false);
+  finish(response(comparisonResponse())); await tick();
+  assert.match(app.get("comparison-error").textContent, /timed out/);
+  assert.equal(app.get("comparison-result").classList.contains("hidden"), true);
+});
+
+test("comparison authorization failure locks and clears dates and prior records", async (t) => {
+  const app = boot(t, (url, options) => {
+    if (options.headers.Authorization !== "Bearer comparison-acceptance-token") return response({}, 401);
+    return url === "/api/v1/spending/compare" ? response({}, 401) : response(payload());
+  });
+  await tick(); app.get("app-token").value = "comparison-acceptance-token"; app.submit("access-form"); await tick();
+  fillComparison(app); app.submit("comparison-form"); await tick();
+  assert.equal(app.get("access-panel").classList.contains("hidden"), false);
+  assert.equal(app.document.activeElement, app.get("app-token"));
+  assert.equal(app.get("comparison-result").classList.contains("hidden"), true);
+  assert.equal(app.get("comparison-evidence").textContent, "");
+  for (const key of ["baseline", "current"]) for (const edge of ["start", "end"]) assert.equal(app.get("comparison-" + key + "-" + edge).value, "");
+  assert.match(app.get("access-error").textContent, /valid app token to compare/);
+  assert.equal(app.calls.filter((call) => call.url === "/api/v1/spending/compare").length, 1);
+});
+
+for (const phase of ["headers", "body"]) {
+  test("late comparison " + phase + " cannot replace a result after a credential change", async (t) => {
+    let finish;
+    const app = boot(t, (url, options) => {
+      if (!options.headers.Authorization) return response({}, 401);
+      if (url !== "/api/v1/spending/compare") return response(payload());
+      if (options.headers.Authorization === "Bearer old-acceptance-token") {
+        if (phase === "headers") return new Promise((resolve) => { finish = resolve; });
+        return { ok: true, status: 200, json: () => new Promise((resolve) => { finish = resolve; }) };
+      }
+      return response(comparisonResponse());
+    });
+    await tick(); app.get("app-token").value = "old-acceptance-token"; app.submit("access-form"); await tick();
+    fillComparison(app); app.submit("comparison-form"); await tick();
+    const oldRequest = app.calls.at(-1);
+    app.click("lock-button"); app.get("app-token").value = "new-acceptance-token"; app.submit("access-form"); await tick();
+    fillComparison(app); app.submit("comparison-form"); await tick();
+    assert.equal(oldRequest.options.signal.aborted, true);
+    const accepted = app.get("comparison-evidence").textContent;
+    assert.notEqual(accepted, "");
+    const oldBody = comparisonResponse(); oldBody.findings[0].text = "STALE PRIOR CUSTOMER CLAIM";
+    finish(phase === "headers" ? response({}, 401) : oldBody); await tick();
+    assert.equal(app.get("access-panel").classList.contains("hidden"), true);
+    assert.equal(app.get("comparison-evidence").textContent, accepted);
+    assert.doesNotMatch(app.document.body.textContent, /STALE PRIOR CUSTOMER CLAIM/);
+    assert.equal(app.calls.filter((call) => call.url === "/api/v1/spending/compare").length, 2);
+  });
+}
+
+test("comparison cancellation restores visible focus with labeled dates and live busy state", async (t) => {
+  let finish;
+  const app = boot(t, (url) => url === "/api/v1/spending/compare" ? new Promise((resolve) => { finish = resolve; }) : response(payload()));
+  await tick();
+  app.document.querySelector('[data-view="insights"]').click();
+  assert.equal(app.calls.length, 1);
+  for (const key of ["baseline", "current"]) for (const edge of ["start", "end"]) {
+    const input = app.get("comparison-" + key + "-" + edge);
+    assert.equal(input.type, "date");
+    assert.ok(input.labels.length > 0);
+    assert.ok(input.closest("fieldset").querySelector("legend").textContent.trim());
+  }
+  assert.equal(app.get("comparison-state").getAttribute("role"), "status");
+  assert.equal(app.get("comparison-state").getAttribute("aria-live"), "polite");
+  assert.equal(app.get("comparison-error").getAttribute("role"), "alert");
+  fillComparison(app); assert.equal(app.calls.length, 1);
+  app.submit("comparison-form");
+  assert.equal(app.get("comparison-form").getAttribute("aria-busy"), "true");
+  assert.equal(app.get("comparison-submit").disabled, true);
+  app.get("comparison-cancel").focus(); app.click("comparison-cancel");
+  assert.equal(app.document.activeElement, app.get("comparison-submit"));
+  assert.equal(app.get("comparison-form").getAttribute("aria-busy"), "false");
+  assert.match(app.get("comparison-state").textContent, /server may finish processing/);
+  finish(response(comparisonResponse())); await tick();
+  assert.equal(app.get("comparison-result").classList.contains("hidden"), true);
+  assert.equal(app.calls.length, 2);
+});
+
+test("comparison completion does not move focus after the user navigates away", async (t) => {
+  let finish;
+  const app = boot(t, (url) => url === "/api/v1/spending/compare" ? new Promise((resolve) => { finish = resolve; }) : response(payload()));
+  await tick(); app.document.querySelector('[data-view="insights"]').click();
+  fillComparison(app); app.submit("comparison-form");
+  app.document.querySelector('[data-view="transactions"]').click();
+  const destination = app.get("transactions-view").querySelector("h1");
+  finish(response(comparisonResponse())); await tick();
+  assert.equal(app.document.activeElement, destination);
+  assert.equal(app.get("insights-view").classList.contains("hidden"), true);
+  assert.match(app.get("comparison-state").textContent, /Comparison ready/);
+});
+
+test("overview chart uses its visible width after resizing from another view", async (t) => {
+  const app = boot(t, askRoute);
+  await tick();
+  let visibleWidth = 800;
+  const chart = app.get("monthly-chart");
+  Object.defineProperty(chart, "clientWidth", { configurable: true, get: () => app.get("overview-view").classList.contains("hidden") ? 0 : visibleWidth });
+  app.window.dispatchEvent(new app.window.Event("resize"));
+  assert.equal(chart.querySelector("svg").style.minWidth, "800px");
+  await openAsk(app);
+  visibleWidth = 248;
+  app.window.dispatchEvent(new app.window.Event("resize"));
+  app.document.querySelector('[data-view="overview"]').click();
+  assert.equal(chart.querySelector("svg").style.minWidth, "248px");
+  assert.match(chart.querySelector("svg").getAttribute("aria-label"), /Monthly net spending in USD/);
+});
+
 function payload() {
   return {
     source: "nessie", customer_id: "cust_test", as_of: "2026-11-14T12:00:00Z",
