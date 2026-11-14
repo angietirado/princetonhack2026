@@ -30,6 +30,7 @@ function boot(t, options = {}) {
   const calls = [], choices = [], errors = [], chatHistory = clone(options.chatHistory || []);
   const scenarios = clone(options.scenarios || [scenario()]);
   const wallets = clone(options.wallets || walletProfiles());
+  const investigationReplies = new Map();
   const chatReplies = new Map(); let chatConstraints = clone(constraints);
   let sequence = 0;
   const serverSession = { id: "session-1", token: "scoped-session-token", scenario: clone(options.snapshot || scenarios[0]), constraints: clone(constraints), is_demo: false, created_at: "2026-11-14T12:00:00Z", choices };
@@ -49,6 +50,7 @@ function boot(t, options = {}) {
   window.confirm = () => true;
   if (options.stored) window.localStorage.setItem("blockwise.participant.v1", JSON.stringify(options.stored));
   if (options.initial) choices.push(clone(options.initial));
+  Object.entries(options.sessionStorage || {}).forEach(([key, value]) => window.sessionStorage.setItem(key, value));
   const defaultHandler = async (url, request) => {
     const body = request.body ? JSON.parse(request.body) : null;
     if (url === "/api/v1/wallets") return response({ wallets, notice: "Fictional local fixtures." });
@@ -56,6 +58,13 @@ function boot(t, options = {}) {
     if (url === "/api/v1/sessions") { serverSession.scenario = clone(scenarios.find((item) => item.id === body.scenario_id) || serverSession.scenario); if (body.wallet_profile_id) serverSession.scenario.financial_context = walletContext(wallets.find((item) => item.id === body.wallet_profile_id)); serverSession.constraints = body.constraints; serverSession.is_demo = body.is_demo; return response(serverSession); }
     if (request.headers.Authorization !== "Bearer scoped-session-token") return response({ detail: "Not authorized" }, 401);
     if (url === "/api/v1/sessions/session-1") return response(serverSession);
+    if (url.endsWith("/investigate")) {
+      if (!investigationReplies.has(body.request_id)) {
+        const report = options.investigation ? options.investigation(body, choices.at(-1)?.id, serverSession.scenario.financial_context) : investigationReport(body, choices.at(-1)?.id);
+        investigationReplies.set(body.request_id, clone(report));
+      }
+      return response(investigationReplies.get(body.request_id));
+    }
     if (url.endsWith("/chat")) {
       if (request.method === "GET") return response({ messages: chatHistory, constraints: chatConstraints });
       if (chatReplies.has(body.request_id)) return response(chatReplies.get(body.request_id));
@@ -516,4 +525,194 @@ test("unresolved wallet values stay unknown and a missing preview never reuses a
   assert.equal(app.get("active-wallet-capacity").textContent, "Needs review");
   assert.match(app.get("wallet-after-choice").textContent, /unavailable or needs review/);
   assert.doesNotMatch(app.get("wallet-after-choice").textContent, /\$18|\$0/);
+});
+
+function investigationReport(body, anchor) {
+  const plans = body.allowed_travel_modes.includes(body.constraints.travel_mode) ? ["value", "corner"].map((store) => ({ ...evaluation({ milk: store, bread: store }, body.constraints), id: "plan_" + store })).filter((plan) => plan.feasible) : [];
+  return { mode: "deterministic", status: plans.length ? "feasible" : "no_feasible_plan", request_id: body.request_id, investigation_id: "report-1", anchor_choice_id: anchor, stale: false, constraints: clone(body.constraints), protected_constraints: clone(body.protected_constraints), allowed_travel_modes: clone(body.allowed_travel_modes), wallet: null, explanation: plans.length ? "Another assignment fits without changing your limits." : "No permitted plan fits your rules.", selected_plan: evaluation(body.assignments, body.constraints), feasible_plans: plans, alternatives: [], evidence: [{ id: "ev_limits", text: "The complete basket was checked against the requested limits.", values: {} }], minimum_requirements: { minimum_budget_cents: 1100, minimum_time_minutes: 20 }, question: plans.length > 1 ? { id: "cost_or_time", text: "Would you rather spend less or finish sooner?" } : null, highlighted_alternative_ids: [] };
+}
+function combinedInvestigation(body, anchor) {
+  const report = investigationReport(body, anchor), limits = { ...body.constraints, budget_cents: 1100, time_budget_minutes: 30 };
+  report.status = "changes_available"; report.feasible_plans = []; report.question = null;
+  report.alternatives = [{ id: "alt_combined", kind: "combined", changes: { budget_cents: 1100, time_budget_minutes: 30 }, constraints: limits, required_minutes: 30, delta: { budget_cents: 100, time_budget_minutes: 15 }, plan: evaluation({ milk: "value", bread: "value" }, limits), evidence_ids: ["ev_limits"] }];
+  report.highlighted_alternative_ids = ["alt_combined"]; return report;
+}
+function changeInvestigationControl(app, id, checked) {
+  app.get(id).checked = checked; app.get(id).dispatchEvent(new app.window.Event("change", { bubbles: true }));
+}
+async function initialInvestigationSession(app, limits) {
+  await tick();
+  if (limits) { app.get("setup-budget").value = (limits.budget_cents / 100).toFixed(2); app.get("setup-time").value = limits.time_budget_minutes; app.get("setup-stops").value = limits.max_stores; }
+  await app.start(); await app.selectStore(); app.click("save-choice"); await tick();
+  app.get("investigation-panel").open = true;
+}
+
+test("switching starting homes preserves all custom setup limits and a new challenge resets defaults", async (t) => {
+  const west = rentalScenario(), east = rentalScenario("east"); east.defaults = { budget_cents: 9000, time_budget_minutes: 99, travel_mode: "drive", max_stores: 2 };
+  const app = boot(t, { scenarios: [west, east] }); await tick();
+  app.get("setup-budget").value = "55.51"; app.get("setup-time").value = "23"; app.get("setup-mode").value = "walk"; app.get("setup-stops").value = "1";
+  app.window.document.querySelector('[data-scenario="houston-rental-east"]').click();
+  assert.equal(app.get("setup-budget").value, "55.51"); assert.equal(app.get("setup-time").value, "23");
+  assert.equal(app.get("setup-mode").value, "walk"); assert.equal(app.get("setup-stops").value, "1");
+  await app.start(); app.click("new-session");
+  assert.equal(app.get("setup-budget").value, "90.00"); assert.equal(app.get("setup-time").value, "99");
+});
+
+test("investigation opens after the initial choice and sends current draft plus explicit controls", async (t) => {
+  const app = boot(t); await app.start();
+  assert.equal(app.get("investigation-panel").hidden, true);
+  app.submit("investigation-form"); await tick();
+  assert.equal(app.calls.some((call) => call.url.endsWith("/investigate")), false);
+  await app.selectStore(); app.click("save-choice"); await tick();
+  assert.equal(app.get("investigation-panel").hidden, false);
+  assert.equal(app.get("investigation-panel").open, false);
+  assert.equal(app.get("investigate-mode-drive").checked, true); assert.equal(app.get("investigate-mode-walk").checked, false);
+  app.get("active-budget").value = "40"; app.get("active-time").value = "60"; app.submit("limits-form"); await tick(); await app.selectStore("value");
+  changeInvestigationControl(app, "investigate-protect-budget", true); changeInvestigationControl(app, "investigate-mode-walk", true);
+  app.submit("investigation-form"); await tick();
+  const request = JSON.parse(app.calls.find((call) => call.url.endsWith("/investigate")).request.body);
+  assert.deepEqual(request.constraints, { ...constraints, budget_cents: 4000, time_budget_minutes: 60 });
+  assert.deepEqual(request.assignments, { milk: "value", bread: "value" });
+  assert.deepEqual(request.protected_constraints, ["budget_cents"]); assert.deepEqual(request.allowed_travel_modes, ["drive", "walk"]);
+  assert.equal(Object.hasOwn(request, "message"), false);
+  assert.equal(app.get("investigation-mode").textContent, "Calculated check");
+  assert.equal(app.get("investigation-report").hidden, false);
+  assert.equal(app.choices.length, 1); assert.equal(app.get("investigation-form").querySelector("textarea"), null);
+});
+
+test("combined proposals disclose every changed limit and apply to draft before a separate save", async (t) => {
+  const app = boot(t, { investigation: combinedInvestigation });
+  await initialInvestigationSession(app, { ...constraints, budget_cents: 1000, time_budget_minutes: 15, max_stores: 1 });
+  app.submit("investigation-form"); await tick();
+  const card = app.window.document.querySelector('[data-investigation-id="alt_combined"]');
+  assert.ok(card, app.get("investigation-status").textContent);
+  assert.match(card.textContent, /Shopping budget: \$10\.00 → \$11\.00/);
+  assert.match(card.textContent, /Whole-trip time: 15 min → 30 min/);
+  assert.match(card.textContent, /Milk: Corner Market → Value Market/);
+  assert.match(card.textContent, /Resulting limits: \$11\.00 · 30 min · 1 store · Driving/);
+  assert.equal(app.get("active-budget").value, "10.00"); assert.equal(app.choices.length, 1);
+  card.querySelector("button").click(); await tick();
+  assert.equal(app.get("active-budget").value, "11.00"); assert.equal(app.get("active-time").value, "30");
+  assert.equal(app.get("item-0").value, "value"); assert.equal(app.choices.length, 1);
+  assert.match(app.get("investigation-status").textContent, /Applied to your draft only/);
+  assert.equal(card.querySelector("button").disabled, true);
+  app.click("save-choice"); await tick(); assert.equal(app.choices.length, 2);
+  assert.equal(app.choices[1].evaluation.constraints.time_budget_minutes, 30);
+});
+
+test("one consequential answer prioritizes verified options without hiding other computed choices or editing the draft", async (t) => {
+  const app = boot(t, { investigation: (body, anchor) => {
+    const report = investigationReport(body, anchor); report.status = "changes_available"; report.feasible_plans = [];
+    report.question = { id: "money_or_time", text: "Which is easier to change: spending more or allowing more time?" };
+    report.alternatives = [["budget", "corner", { budget_cents: 1200 }], ["time", "value", { time_budget_minutes: 30 }]].map(([kind, store, changes]) => { const limits = { ...body.constraints, ...changes }; const plan = evaluation({ milk: store, bread: store }, limits); return { id: "alt_" + kind, kind, changes, constraints: limits, plan, required_minutes: plan.total_minutes, evidence_ids: ["ev_limits"] }; });
+    return report;
+  } }); await initialInvestigationSession(app, { ...constraints, budget_cents: 1100, time_budget_minutes: 20, max_stores: 1 });
+  app.submit("investigation-form"); await tick();
+  assert.equal(app.get("investigation-answers").querySelectorAll("button").length, 2);
+  app.window.document.querySelector('[data-investigation-answer="more-time"]').click();
+  assert.equal(app.get("investigation-alternatives").firstElementChild.dataset.investigationId, "alt_time");
+  assert.equal(app.get("investigation-more").hidden, false);
+  assert.ok(app.get("investigation-more-list").querySelector('[data-investigation-id="alt_budget"]'));
+  assert.equal(app.get("active-time").value, "20"); assert.equal(app.get("active-budget").value, "11.00");
+  assert.equal(app.choices.length, 1); assert.equal(app.calls.filter((call) => call.url.endsWith("/investigate")).length, 1);
+});
+
+for (const problem of ["protected", "undisclosed", "transport"]) test("unverified investigation proposal is rejected: " + problem, async (t) => {
+  const app = boot(t, { investigation: (body, anchor) => {
+    const report = combinedInvestigation(body, anchor), alternative = report.alternatives[0];
+    if (problem === "undisclosed") delete alternative.changes.time_budget_minutes;
+    if (problem === "transport") { alternative.changes.travel_mode = "walk"; alternative.constraints.travel_mode = "walk"; alternative.plan.constraints.travel_mode = "walk"; }
+    return report;
+  } }); await initialInvestigationSession(app, { ...constraints, budget_cents: 1000, time_budget_minutes: 15, max_stores: 1 });
+  if (problem === "protected") changeInvestigationControl(app, "investigate-protect-budget", true);
+  app.submit("investigation-form"); await tick();
+  assert.equal(app.window.document.querySelectorAll("[data-investigation-apply]").length, 0);
+  assert.match(app.get("investigation-status").textContent, /could not be verified|did not disclose/);
+  assert.equal(app.get("active-budget").value, "10.00"); assert.equal(app.get("active-time").value, "15"); assert.equal(app.choices.length, 1);
+});
+
+test("explicitly unavailable transport produces no proposal and never silently enables driving", async (t) => {
+  const app = boot(t); await initialInvestigationSession(app);
+  changeInvestigationControl(app, "investigate-mode-drive", false);
+  app.submit("investigation-form"); await tick();
+  const body = JSON.parse(app.calls.find((call) => call.url.endsWith("/investigate")).request.body);
+  assert.deepEqual(body.allowed_travel_modes, []);
+  assert.equal(app.get("investigate-mode-drive").checked, false); assert.equal(app.get("investigate-mode-walk").checked, false);
+  assert.equal(app.window.document.querySelectorAll("[data-investigation-apply]").length, 0);
+  assert.equal(app.get("investigation-question-wrap").hidden, true);
+  assert.match(app.get("investigation-explanation").textContent, /No permitted plan/);
+});
+
+test("draft, settings and saved-choice changes invalidate report actions", async (t) => {
+  const app = boot(t); await initialInvestigationSession(app);
+  app.submit("investigation-form"); await tick();
+  let button = app.window.document.querySelector("[data-investigation-apply]"); assert.equal(button.disabled, false);
+  changeInvestigationControl(app, "investigate-protect-time", true);
+  assert.equal(button.disabled, true); assert.match(app.get("investigation-status").textContent, /settings changed/);
+  app.submit("investigation-form"); await tick(); button = app.window.document.querySelector("[data-investigation-apply]");
+  await app.selectStore("value"); assert.equal(button.disabled, true); assert.match(app.get("investigation-status").textContent, /draft changed/);
+  app.submit("investigation-form"); await tick(); button = app.window.document.querySelector("[data-investigation-apply]");
+  app.click("save-choice"); await tick(); assert.equal(button.disabled, true); assert.match(app.get("investigation-status").textContent, /newer choice was saved/);
+  const requests = app.calls.filter((call) => call.url.endsWith("/investigate")).map((call) => JSON.parse(call.request.body));
+  assert.equal(new Set(requests.map((body) => body.request_id)).size, 3);
+});
+
+test("a slower investigation cannot offer apply actions after the participant changes the draft", async (t) => {
+  let release;
+  const app = boot(t, { handler: async (url, request, next) => {
+    const result = await next(url, request);
+    return url.endsWith("/investigate") ? new Promise((resolve) => { release = () => resolve(result); }) : result;
+  } }); await initialInvestigationSession(app);
+  app.submit("investigation-form"); await tick();
+  assert.equal(app.get("investigate-button").disabled, true);
+  await app.selectStore("value"); release(); await tick();
+  assert.match(app.get("investigation-status").textContent, /superseded/);
+  assert.ok([...app.window.document.querySelectorAll("[data-investigation-apply]")].every((button) => button.disabled));
+  assert.equal(app.get("item-0").value, "value"); assert.equal(app.choices.length, 1);
+});
+
+for (const reason of ["stale", "anchor"]) test("server marks an investigation unusable: " + reason, async (t) => {
+  const app = boot(t, { investigation: (body, anchor) => { const report = investigationReport(body, anchor); if (reason === "stale") report.stale = true; else report.anchor_choice_id = "newer-choice"; return report; } });
+  await initialInvestigationSession(app); app.submit("investigation-form"); await tick();
+  assert.match(app.get("investigation-status").textContent, /superseded/);
+  assert.ok([...app.window.document.querySelectorAll("[data-investigation-apply]")].every((button) => button.disabled));
+  assert.equal(app.choices.length, 1);
+});
+
+test("using a proposal verifies the latest server choice and rejects a report superseded in another tab", async (t) => {
+  const app = boot(t); await initialInvestigationSession(app); app.submit("investigation-form"); await tick();
+  app.choices.push({ id: "choice-from-another-tab", stage: "revised", evaluation: evaluation(), created_at: "2026-11-14T12:01:00Z" });
+  const button = app.window.document.querySelector('[data-investigation-apply="plan_value"]'); button.click(); await tick();
+  assert.equal(app.get("item-0").value, "corner"); assert.equal(button.disabled, true);
+  assert.match(app.get("investigation-status").textContent, /newer choice was saved/);
+  assert.equal(app.calls.filter((call) => call.url.endsWith("/choices")).length, 1);
+  app.submit("investigation-form"); await tick();
+  assert.equal(app.window.document.querySelector('[data-investigation-apply="plan_value"]').disabled, false);
+});
+
+test("lost investigation responses reuse durable UUIDs and explicit controls after reload", async (t) => {
+  let lost = true;
+  const app = boot(t, { handler: async (url, request, next) => { const result = await next(url, request); if (url.endsWith("/investigate") && lost) { lost = false; throw new Error("Lost investigation response"); } return result; } });
+  await initialInvestigationSession(app); changeInvestigationControl(app, "investigate-protect-time", true); changeInvestigationControl(app, "investigate-mode-walk", true);
+  app.submit("investigation-form"); await tick();
+  assert.match(app.get("investigation-status").textContent, /Retry the same check safely/);
+  const original = JSON.parse(app.calls.find((call) => call.url.endsWith("/investigate")).request.body);
+  const sessionStorage = Object.fromEntries(Array.from({ length: app.window.sessionStorage.length }, (_, index) => { const key = app.window.sessionStorage.key(index); return [key, app.window.sessionStorage.getItem(key)]; }));
+  const resumed = boot(t, { stored: JSON.parse(app.window.localStorage.getItem("blockwise.participant.v1")), initial: app.choices[0], sessionStorage }); await tick();
+  assert.equal(resumed.get("investigate-protect-time").checked, true); assert.equal(resumed.get("investigate-mode-walk").checked, true);
+  resumed.submit("investigation-form"); await tick();
+  const retried = JSON.parse(resumed.calls.find((call) => call.url.endsWith("/investigate")).request.body);
+  assert.deepEqual(retried, original);
+  assert.equal(resumed.get("investigation-report").hidden, false);
+  assert.equal(resumed.choices.length, 1);
+});
+
+test("wallet review and calculated fallback never become AI claims or usable proposals", async (t) => {
+  const app = boot(t, { investigation: (body, anchor) => { const report = investigationReport(body, anchor); report.mode = "fallback"; report.status = "needs_review"; report.wallet = { status: "needs_review", spendable_now_cents: null }; report.feasible_plans = []; report.question = null; report.explanation = 'Wallet entries need review. <img src=x onerror="alert(1)">'; return report; } });
+  await initialInvestigationSession(app); app.submit("investigation-form"); await tick();
+  assert.equal(app.get("investigation-mode").textContent, "Calculated check");
+  assert.equal(app.window.document.querySelectorAll("[data-investigation-apply]").length, 0);
+  assert.equal(app.get("investigation-explanation").querySelector("img"), null);
+  assert.match(app.get("investigation-explanation").textContent, /Wallet entries need review/);
+  assert.equal(app.get("investigation-question-wrap").hidden, true);
 });

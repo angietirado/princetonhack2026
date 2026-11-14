@@ -16,6 +16,7 @@ Updated November 14, 2026. Continuous development remains active until the user 
 - `1123f6e`: recorded home facts in the participant interface.
 - `9c2a81a`: wallet guards across all shopping paths and persistent authenticated investigations.
 - `b897283`: optional wallet selection, cash breakdown and one-trip preview with independent UI review.
+- `cd520e1`: deterministic audit of initial choices within exact financial and scenario cohorts.
 
 ## Working in the apps
 
@@ -46,11 +47,10 @@ Updated November 14, 2026. Continuous development remains active until the user 
 
 ## Active work
 
-1. Expose recorded home facts clearly in the participant interface.
-2. Connect optional synthetic wallet profiles to session creation, evaluation, recommendations and chat.
-3. Add authenticated, retry-safe investigation reports and an explicit participant interaction.
-4. Repeat independent UI/UX and browser review as each visible feature becomes usable.
-5. Continue improving the experiment and analytics based on verified behavior; commit every milestone.
+1. Participant investigation controls are verified: 41 participant regressions plus real browser protection, stale-draft, draft/apply/save and money-versus-time flows passed.
+2. Analytics audit interface passed 24 regressions and two browser flows. Final review polish is underway: shorter identifiers and Not applicable for empty denominators.
+3. Run independent UI/UX and browser review as each visible feature becomes usable.
+4. Continue improving the experiment based on verified behavior; commit every milestone.
 
 ## Product direction
 

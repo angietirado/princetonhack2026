@@ -5,9 +5,12 @@
   const requestedDemo = new URL(location.href).searchParams.get("demo") === "1";
   const PENDING_KEY = "blockwise.pending.v1";
   const CHAT_PENDING_KEY = "blockwise.chat-pending.v1";
+  const INVESTIGATION_PENDING_KEY = "blockwise.investigation-pending.v1";
+  const INVESTIGATION_SETTINGS_KEY = "blockwise.investigation-settings.v1";
+  const investigationLimits = { budget_cents: ["budget", "Shopping budget"], time_budget_minutes: ["time", "Whole-trip time"], max_stores: ["stops", "Store limit"], travel_mode: ["travel", "Travel mode"] };
   const colors = ["#d5ee87", "#d0dfc4", "#edd4b7", "#c4d9da", "#e3c7b8"];
   const icons = { milk: "◒", eggs: "◉", bread: "▰", rice: "▤", chicken: "◈", apples: "●", greens: "❧", coffee: "▥" };
-  const state = { wallets: [], walletProfileId: "", walletLoading: false, walletSequence: 0, scenarios: [], scenario: null, session: null, token: "", constraints: null, assignments: {}, choices: [], evaluation: null, evaluating: false, saving: false, starting: false, epoch: 0, evalSequence: 0, recommendationSequence: 0, pending: {}, lastSavedKey: "", chatMessages: [], chatBusy: false, chatSequence: 0, chatProposal: null, chatPending: {} };
+  const state = { setupInitialized: false, investigation: null, investigationBusy: false, investigationSequence: 0, investigationRevision: 0, investigationNeedsSync: false, wallets: [], walletProfileId: "", walletLoading: false, walletSequence: 0, scenarios: [], scenario: null, session: null, token: "", constraints: null, assignments: {}, choices: [], evaluation: null, evaluating: false, saving: false, starting: false, epoch: 0, evalSequence: 0, recommendationSequence: 0, pending: {}, lastSavedKey: "", chatMessages: [], chatBusy: false, chatSequence: 0, chatProposal: null, chatPending: {} };
   const money = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
   const minutes = (value) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 1 }) + " min";
   const escape = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -103,7 +106,7 @@
   function chooseScenario(id) {
     state.scenario = state.scenarios.find((s) => s.id === id);
     if (!state.scenario) return;
-    setFields("setup", state.scenario.defaults);
+    if (!state.setupInitialized) { setFields("setup", state.scenario.defaults); state.setupInitialized = true; }
     [...$("scenario-cards").children].forEach((button) => { const selected = button.dataset.scenario === id; button.classList.toggle("selected", selected); button.setAttribute("aria-pressed", String(selected)); });
     $("preview-location").textContent = state.scenario.home.label;
     $("selected-home").textContent = homeAddress(state.scenario.home);
@@ -122,7 +125,7 @@
       button.innerHTML = '<span class="scenario-number">STARTING HOME ' + String(i + 1).padStart(2, "0") + '</span><span class="selection-dot" aria-hidden="true"></span><strong>' + escape(scenario.name.replace(/ shopping challenge$/i, "")) + '</strong>' + detail;
       button.addEventListener("click", () => chooseScenario(scenario.id)); $("scenario-cards").append(button);
     });
-    chooseScenario(state.scenario?.id || state.scenarios[0]?.id);
+    chooseScenario(state.scenarios.some((scenario) => scenario.id === state.scenario?.id) ? state.scenario.id : state.scenarios[0]?.id);
   }
   function walletAmount(value) { return Number.isSafeInteger(value) ? money(value) : "Not available"; }
   function renderWalletSelection() {
@@ -224,6 +227,7 @@
     $("save-choice").textContent = state.saving ? "Saving your choice…" : state.lastSavedKey === draftKey() ? "Choice saved ✓" : initial ? "Save my revised choice →" : "Save my first choice →";
     $("save-explainer").textContent = initial ? "Trying a plan does not save it. Save when you are ready." : "Save your first choice to reveal alternatives.";
     $("save-choice").disabled = !state.evaluation || state.evaluating || state.saving || state.lastSavedKey === draftKey();
+    updateInvestigationControls();
   }
   function clearEvaluation() {
     state.evaluation = null; renderWalletPreview();
@@ -258,6 +262,7 @@
     renderWalletPreview(e); renderMap("active-map", state.scenario, e.route); renderProgress();
   }
   function draftChanged() {
+    invalidateInvestigation("Your draft changed. Check again before applying a proposal.");
     state.evalSequence++; state.evaluation = null; state.evaluating = false;
     $("save-status").textContent = ""; $("saved-result").hidden = true;
     syncAssignments(); persist(); clearEvaluation(); notice("evaluation-error", ""); $("retry-evaluation").hidden = true;
@@ -293,7 +298,7 @@
     $("source-world").textContent = worldContext(state.scenario);
     $("source-notes").replaceChildren();
     Object.values(state.scenario.provenance || {}).forEach((text) => { const p = document.createElement("p"); p.textContent = text; $("source-notes").append(p); });
-    renderWalletContext(); renderStores(); renderBasket(); renderMap("active-map", state.scenario); clearEvaluation();
+    resetInvestigation(); renderWalletContext(); renderStores(); renderBasket(); renderMap("active-map", state.scenario); clearEvaluation();
     $("recommendations-section").hidden = !state.choices.some((c) => c.stage === "initial");
     if (complete()) evaluate();
     if (state.choices.some((c) => c.stage === "initial")) { recommendations(); loadChat(); } else { $("chat-section").hidden = true; }
@@ -327,6 +332,7 @@
       if (epoch !== state.epoch) return;
       if (!choice.id || !validEvaluation(choice.evaluation)) throw new Error("We could not verify that your choice saved. Retry to check the same submission.");
       if (!state.choices.some((c) => c.id === choice.id)) state.choices.push(choice);
+      invalidateInvestigation("A newer choice was saved. Check again before applying a proposal.");
       clearPending(); state.lastSavedKey = stage === "revised" ? key : ""; persist();
       $("save-status").textContent = stage === "initial" ? "First choice saved. Now explore your alternatives below." : "Your revised choice is saved.";
       if (stage === "initial") {
@@ -362,6 +368,196 @@
       $("recommendations-note").textContent = (Number.isInteger(result.feasible_plan_count) ? result.feasible_plan_count + " feasible plans checked. " : "") + (result.notice || "Prices and travel are modeled. No limits were relaxed.");
     } catch (error) { if (sequence === state.recommendationSequence && epoch === state.epoch) notice("recommendations-status", error.message); }
     finally { if (sequence === state.recommendationSequence && epoch === state.epoch) $("refresh-recommendations").disabled = false; }
+  }
+  function investigationSettings() {
+    return {
+      protected_constraints: Object.keys(investigationLimits).filter((key) => $("investigate-protect-" + investigationLimits[key][0]).checked).sort(),
+      allowed_travel_modes: ["drive", "walk"].filter((mode) => $("investigate-mode-" + mode).checked && !$("investigate-mode-" + mode).dataset.unavailable),
+    };
+  }
+  function investigationBody() { return { constraints: copy(state.constraints), assignments: copy(state.assignments), ...investigationSettings() }; }
+  function investigationKey(body = investigationBody()) {
+    return JSON.stringify([state.session?.id, state.choices.at(-1)?.id, constraintsKey(body.constraints), state.scenario.basket.map((item) => [item.id, body.assignments[item.id] || ""]), body.protected_constraints, body.allowed_travel_modes]);
+  }
+  function investigationUsable() {
+    const value = state.investigation;
+    return Boolean(value && !value.invalidated && !value.report.stale && value.report.anchor_choice_id === state.choices.at(-1)?.id && value.key === investigationKey() && !state.saving);
+  }
+  function updateInvestigationControls() {
+    const allowed = Boolean(state.session && state.choices.some((choice) => choice.stage === "initial"));
+    $("investigation-panel").hidden = !allowed;
+    $("investigate-button").disabled = !allowed || state.investigationBusy || state.saving || !complete();
+    $("investigate-button").textContent = state.investigationBusy ? "Checking…" : "Check possible changes";
+    $("investigation-form").querySelectorAll("input").forEach((input) => { input.disabled = state.investigationBusy || Boolean(input.dataset.unavailable); });
+    $("investigation-report").querySelectorAll("button").forEach((button) => { button.disabled = state.investigationBusy || !investigationUsable(); });
+  }
+  function invalidateInvestigation(message) {
+    state.investigationRevision++;
+    if (state.investigation) { state.investigation.invalidated = true; $("investigation-status").textContent = message; }
+    updateInvestigationControls();
+  }
+  function resetInvestigation() {
+    state.investigationSequence++; state.investigationRevision++;
+    state.investigation = null; state.investigationBusy = false; state.investigationNeedsSync = false;
+    $("investigation-panel").open = false; $("investigation-report").hidden = true; $("investigation-status").textContent = "";
+    const saved = storageRead(INVESTIGATION_SETTINGS_KEY, sessionStorage);
+    const prior = saved?.session_id === state.session.id ? saved : null;
+    Object.entries(investigationLimits).forEach(([key, names]) => { $("investigate-protect-" + names[0]).checked = Array.isArray(prior?.protected_constraints) && prior.protected_constraints.includes(key); });
+    const available = state.scenario.financial_context?.projection?.allowed_travel_modes;
+    ["walk", "drive"].forEach((mode) => {
+      const input = $("investigate-mode-" + mode), unavailable = Array.isArray(available) && !available.includes(mode);
+      if (unavailable) input.dataset.unavailable = "true"; else delete input.dataset.unavailable;
+      input.checked = !unavailable && (Array.isArray(prior?.allowed_travel_modes) ? prior.allowed_travel_modes.includes(mode) : state.constraints.travel_mode === mode);
+    });
+    $("investigation-transport-note").textContent = Array.isArray(available) && available.length < 2 ? "Only checked modes can be proposed. Unavailable modes are excluded by this session's wallet context." : "Only checked modes can be proposed. Leaving both unchecked means no transport is available.";
+    updateInvestigationControls();
+  }
+  function investigationSettingChanged() {
+    storageWrite(INVESTIGATION_SETTINGS_KEY, { session_id: state.session.id, ...investigationSettings() }, sessionStorage);
+    invalidateInvestigation("Your investigation settings changed. Check again before applying a proposal.");
+  }
+  function validInvestigationPlan(plan, constraints, request, report) {
+    if (!validEvaluation(plan) || !plan.feasible || plan.violations.length || !validConstraints(constraints) || constraintsKey(plan.constraints) !== constraintsKey(constraints)) return false;
+    const itemIds = state.scenario.basket.map((item) => item.id), storeIds = state.scenario.stores.map((store) => store.id);
+    if (!plan.assignments || Object.keys(plan.assignments).length !== itemIds.length || !itemIds.every((id) => storeIds.includes(plan.assignments[id]))) return false;
+    const visited = [...new Set(Object.values(plan.assignments))];
+    if (visited.length > constraints.max_stores || !Array.isArray(plan.store_ids) || plan.store_ids.length !== visited.length || !visited.every((id) => plan.store_ids.includes(id))) return false;
+    if (plan.route[0] !== "home" || plan.route.at(-1) !== "home" || plan.route.some((id) => id !== "home" && !visited.includes(id)) || !visited.every((id) => plan.route.includes(id))) return false;
+    if (plan.total_cost_cents !== plan.basket_cost_cents + plan.transport_cost_cents || plan.total_cost_cents > constraints.budget_cents || plan.total_minutes > constraints.time_budget_minutes) return false;
+    if (!report.allowed_travel_modes.includes(constraints.travel_mode) || request.protected_constraints.some((key) => constraints[key] !== request.constraints[key])) return false;
+    if (report.wallet && (report.wallet.status !== "ready" || !Number.isSafeInteger(report.wallet.spendable_now_cents) || plan.total_cost_cents > report.wallet.spendable_now_cents)) return false;
+    return true;
+  }
+  function checkedInvestigation(report, request, requestId) {
+    const sameSet = (a, b) => Array.isArray(a) && a.length === b.length && new Set(a).size === a.length && a.every((value) => b.includes(value));
+    if (!report || !["deterministic", "langchain", "fallback"].includes(report.mode) || !["feasible", "changes_available", "no_feasible_plan", "needs_review"].includes(report.status) || report.request_id !== requestId || typeof report.anchor_choice_id !== "string" || typeof report.stale !== "boolean" || typeof report.explanation !== "string" || !validConstraints(report.constraints) || constraintsKey(report.constraints) !== constraintsKey(request.constraints)) throw new Error("We could not verify this investigation. Your draft is unchanged.");
+    if (!sameSet(report.protected_constraints, request.protected_constraints) || !Array.isArray(report.allowed_travel_modes) || new Set(report.allowed_travel_modes).size !== report.allowed_travel_modes.length || report.allowed_travel_modes.some((mode) => !request.allowed_travel_modes.includes(mode))) throw new Error("The investigation did not preserve your protected limits or available transport.");
+    if (report.wallet && Array.isArray(report.wallet.allowed_travel_modes) && report.allowed_travel_modes.some((mode) => !report.wallet.allowed_travel_modes.includes(mode))) throw new Error("The investigation proposed unavailable transport.");
+    if (!Array.isArray(report.alternatives) || report.alternatives.length > 8 || !Array.isArray(report.feasible_plans) || report.feasible_plans.length > 8 || !Array.isArray(report.evidence) || report.evidence.length > 40 || report.evidence.some((entry) => !entry || typeof entry.id !== "string" || typeof entry.text !== "string")) throw new Error("The investigation returned an unreadable report.");
+    const entries = report.feasible_plans.map((plan) => ({ id: plan.id, kind: "feasible", changes: {}, constraints: report.constraints, plan, required_minutes: plan.total_minutes }));
+    report.alternatives.forEach((alternative) => {
+      if (!alternative || !alternative.changes || typeof alternative.changes !== "object" || !validConstraints(alternative.constraints)) throw new Error("A proposal has incomplete changes.");
+      const changed = Object.keys(investigationLimits).filter((key) => alternative.constraints[key] !== request.constraints[key]);
+      if (!changed.length || !sameSet(Object.keys(alternative.changes), changed) || changed.some((key) => alternative.changes[key] !== alternative.constraints[key])) throw new Error("A proposal did not disclose every required change.");
+      if (!Array.isArray(alternative.evidence_ids) || alternative.evidence_ids.some((id) => !report.evidence.some((entry) => entry.id === id))) throw new Error("A proposal has unverified evidence.");
+      entries.push(alternative);
+    });
+    if ((report.status === "needs_review" || report.status === "no_feasible_plan") && entries.length) throw new Error("This report cannot offer a verified draft.");
+    if (new Set(entries.map((entry) => entry.id)).size !== entries.length || entries.some((entry) => typeof entry.id !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(entry.id) || !Number.isFinite(entry.required_minutes) || entry.required_minutes < 0 || !validInvestigationPlan(entry.plan, entry.constraints, request, report))) throw new Error("A proposed plan could not be verified against your rules.");
+    if (report.question !== null && report.question !== undefined && (typeof report.question.id !== "string" || typeof report.question.text !== "string")) throw new Error("The investigation question could not be read.");
+    return entries;
+  }
+  function investigationLimitText(key, value) {
+    if (key === "budget_cents") return money(value);
+    if (key === "time_budget_minutes") return minutes(value);
+    if (key === "travel_mode") return value === "walk" ? "Walking" : "Driving";
+    return value + (value === 1 ? " store" : " stores");
+  }
+  function investigationCard(entry) {
+    const card = document.createElement("article"), heading = document.createElement("h3"), changes = document.createElement("ul"), limits = document.createElement("p"), result = document.createElement("p"), route = document.createElement("p"), button = document.createElement("button");
+    card.className = "investigation-card"; card.dataset.investigationId = entry.id; changes.className = "investigation-changes";
+    heading.textContent = Object.keys(entry.changes).length ? "Changes to consider" : "A plan within your limits";
+    if (!Object.keys(entry.changes).length) { const item = document.createElement("li"); item.textContent = "No limit changes."; changes.append(item); }
+    Object.keys(investigationLimits).filter((key) => key in entry.changes).forEach((key) => { const item = document.createElement("li"); item.textContent = investigationLimits[key][1] + ": " + investigationLimitText(key, state.investigation.request.constraints[key]) + " → " + investigationLimitText(key, entry.changes[key]); changes.append(item); });
+    limits.className = "investigation-limits"; limits.textContent = "Resulting limits: " + Object.keys(investigationLimits).map((key) => investigationLimitText(key, entry.constraints[key])).join(" · ");
+    result.className = "investigation-result"; result.textContent = money(entry.plan.total_cost_cents) + " total · " + minutes(entry.plan.total_minutes) + " whole trip";
+    route.className = "quiet"; route.textContent = entry.plan.route.map(storeName).join(" → ");
+    card.append(heading, changes, limits, result, route);
+    const changedItems = state.scenario.basket.filter((item) => state.investigation.request.assignments[item.id] !== entry.plan.assignments[item.id]);
+    if (changedItems.length) {
+      const details = document.createElement("details"), summary = document.createElement("summary"), list = document.createElement("ul");
+      details.className = "investigation-store-changes"; summary.textContent = "Store changes (" + changedItems.length + ")";
+      changedItems.forEach((item) => { const line = document.createElement("li"); line.textContent = item.name + ": " + storeName(state.investigation.request.assignments[item.id]) + " → " + storeName(entry.plan.assignments[item.id]); list.append(line); });
+      details.append(summary, list); card.append(details);
+    }
+    button.type = "button"; button.className = "button secondary"; button.dataset.investigationApply = entry.id; button.textContent = "Use this draft";
+    button.addEventListener("click", () => applyInvestigation(entry.id)); card.append(button); return card;
+  }
+  function renderInvestigationOptions(preferred = []) {
+    const entries = state.investigation.entries, first = entries.filter((entry) => preferred.includes(entry.id));
+    const featured = (first.length ? first : entries).slice(0, 3), rest = entries.filter((entry) => !featured.includes(entry));
+    $("investigation-alternatives").replaceChildren(...featured.map(investigationCard));
+    $("investigation-more-list").replaceChildren(...rest.map(investigationCard)); $("investigation-more").hidden = !rest.length;
+    updateInvestigationControls();
+  }
+  function renderInvestigationQuestion() {
+    const question = state.investigation.report.question; $("investigation-answers").replaceChildren();
+    $("investigation-question-wrap").hidden = !question; if (!question) return;
+    $("investigation-question").textContent = question.text;
+    const answer = (id, label, action) => { const button = document.createElement("button"); button.type = "button"; button.className = "investigation-answer"; button.dataset.investigationAnswer = id; button.textContent = label; button.setAttribute("aria-pressed", "false"); button.addEventListener("click", () => { if (!investigationUsable() || state.investigationBusy) return; $("investigation-answers").querySelectorAll("button").forEach((item) => item.setAttribute("aria-pressed", String(item === button))); action(); }); $("investigation-answers").append(button); };
+    const prefer = (kind, label) => { renderInvestigationOptions(state.investigation.entries.filter((entry) => entry.kind === kind).map((entry) => entry.id)); $("investigation-status").textContent = label + " highlighted. Review every required change before using a draft."; };
+    const protect = (key) => { $("investigate-protect-" + investigationLimits[key][0]).checked = true; investigationSettingChanged(); runInvestigation(); };
+    if (question.id === "money_or_time") { answer("more-time", "More time", () => prefer("time", "Time changes")); answer("more-budget", "A higher budget", () => prefer("budget", "Budget changes")); }
+    else if (question.id === "extra_stop") { answer("extra-stop", "Compare an extra stop", () => prefer("stops", "Store-limit changes")); answer("protect-stops", "Check again with store limit fixed", () => protect("max_stores")); }
+    else if (question.id === "transport") { answer("other-transport", "Compare other transport", () => prefer("transport", "Transport changes")); answer("protect-travel", "Check again with travel mode fixed", () => protect("travel_mode")); }
+    else if (question.id === "protect_one") Object.entries(investigationLimits).forEach(([key, names]) => answer("protect-" + names[0], "Check again with " + names[1].toLowerCase() + " fixed", () => protect(key)));
+    else if (question.id === "cost_or_time") [["lower-cost", "Spend less", "total_cost_cents"], ["less-time", "Finish sooner", "total_minutes"]].forEach(([id, label, metric]) => answer(id, label, () => { const ranked = [...state.investigation.entries].sort((a, b) => a.plan[metric] - b.plan[metric]); renderInvestigationOptions(ranked.length ? [ranked[0].id] : []); $("investigation-status").textContent = "Your preferred tradeoff is highlighted. Your draft is unchanged."; }));
+  }
+  function renderInvestigation() {
+    const value = state.investigation, report = value.report;
+    $("investigation-report").hidden = false;
+    $("investigation-mode").textContent = report.mode === "langchain" ? "AI-prioritized check" : "Calculated check";
+    $("investigation-explanation").textContent = report.explanation;
+    renderInvestigationQuestion(); renderInvestigationOptions(Array.isArray(report.highlighted_alternative_ids) ? report.highlighted_alternative_ids : []);
+    $("investigation-more").open = false; $("investigation-evidence").open = false; $("investigation-evidence-list").replaceChildren();
+    report.evidence.forEach((entry) => { const line = document.createElement("p"); line.textContent = entry.text; $("investigation-evidence-list").append(line); });
+    const minima = report.minimum_requirements || {};
+    [["minimum_budget_cents", "Minimum cost with time, stops and travel fixed: ", money], ["minimum_time_minutes", "Modeled minimum time with budget, stops and travel fixed: ", minutes]].forEach(([key, label, format]) => { if (Number.isFinite(minima[key])) { const line = document.createElement("p"); line.textContent = label + format(minima[key]) + ". These facts alone do not authorize a change."; $("investigation-evidence-list").append(line); } });
+    updateInvestigationControls();
+  }
+  async function refreshInvestigationAnchor() {
+    const session = await api("/sessions/" + encodeURIComponent(state.session.id));
+    if (!Array.isArray(session.choices) || session.choices.some((choice) => !choice || typeof choice.id !== "string")) throw new Error("The latest saved choice could not be verified.");
+    return session.choices;
+  }
+  async function runInvestigation(event) {
+    event?.preventDefault();
+    if (!chatAllowed() || state.investigationBusy || state.saving) return;
+    if (!complete()) { $("investigation-status").textContent = "Choose a store for every item before checking possible changes."; return; }
+    const epoch = state.epoch, sequence = ++state.investigationSequence, revision = state.investigationRevision, body = investigationBody();
+    state.investigationBusy = true; if (state.investigation) state.investigation.invalidated = true;
+    $("investigation-status").textContent = "Checking the complete basket against your rules…"; updateInvestigationControls();
+    let key, pending;
+    try {
+      if (state.investigationNeedsSync) {
+        const choices = await refreshInvestigationAnchor(); if (epoch !== state.epoch || sequence !== state.investigationSequence) return;
+        state.choices = choices; state.investigationNeedsSync = false; renderProgress();
+      }
+      key = investigationKey(body); pending = storageRead(INVESTIGATION_PENDING_KEY, sessionStorage) || {};
+      if (!pending[key]) { pending = Object.fromEntries(Object.entries(pending).slice(-9)); pending[key] = uuid(); storageWrite(INVESTIGATION_PENDING_KEY, pending, sessionStorage); }
+      const requestId = pending[key];
+      const result = await api("/sessions/" + encodeURIComponent(state.session.id) + "/investigate", { method: "POST", body: { ...body, request_id: requestId } });
+      if (epoch !== state.epoch || sequence !== state.investigationSequence) return;
+      const entries = checkedInvestigation(result, body, requestId);
+      const changed = revision !== state.investigationRevision || key !== investigationKey() || result.stale || result.anchor_choice_id !== state.choices.at(-1)?.id;
+      state.investigation = { report: result, entries, request: body, key, invalidated: changed };
+      state.investigationNeedsSync = result.stale || result.anchor_choice_id !== state.choices.at(-1)?.id;
+      delete pending[key]; storageWrite(INVESTIGATION_PENDING_KEY, pending, sessionStorage);
+      renderInvestigation();
+      $("investigation-status").textContent = changed ? "This report was superseded by a draft, setting, or saved-choice change. Check again before applying." : result.mode === "langchain" ? "AI prioritized these calculated options. Your draft is unchanged." : "Calculated from your explicit controls. Your draft is unchanged.";
+    } catch (error) {
+      if (epoch === state.epoch && sequence === state.investigationSequence) $("investigation-status").textContent = error.message + " Retry the same check safely; your draft is unchanged.";
+    } finally { if (epoch === state.epoch && sequence === state.investigationSequence) { state.investigationBusy = false; updateInvestigationControls(); } }
+  }
+  async function applyInvestigation(id) {
+    if (!investigationUsable() || state.investigationBusy) return;
+    const value = state.investigation, entry = value.entries.find((item) => item.id === id), epoch = state.epoch, revision = state.investigationRevision, sequence = ++state.investigationSequence;
+    if (!entry || !validInvestigationPlan(entry.plan, entry.constraints, value.request, value.report)) return;
+    state.investigationBusy = true; $("investigation-status").textContent = "Confirming the latest saved choice before updating your draft…"; updateInvestigationControls();
+    try {
+      const choices = await refreshInvestigationAnchor();
+      if (epoch !== state.epoch || sequence !== state.investigationSequence) return;
+      if (choices.at(-1)?.id !== value.report.anchor_choice_id) { state.choices = choices; invalidateInvestigation("A newer choice was saved. Check again before applying this proposal."); renderProgress(); return; }
+      if (revision !== state.investigationRevision || !investigationUsable()) { invalidateInvestigation("Your draft or settings changed. Check again before applying."); return; }
+      state.constraints = copy(entry.constraints); state.assignments = copy(entry.plan.assignments); setFields("active", state.constraints);
+      $("limits-summary").textContent = money(state.constraints.budget_cents) + " · " + minutes(state.constraints.time_budget_minutes);
+      draftChanged(); recommendations();
+      notice("session-notice", "Proposal applied to your draft. Review the totals, then save your revised choice separately.");
+      $("investigation-status").textContent = "Applied to your draft only. Your saved choices have not changed.";
+      $("save-status").textContent = "Proposal applied. Your revised choice has not been saved.";
+      $("plan-heading").scrollIntoView?.({ behavior: "smooth", block: "center" });
+    } catch (error) { if (epoch === state.epoch && sequence === state.investigationSequence) $("investigation-status").textContent = error.message + " Your draft is unchanged. Retry using the proposal when ready."; }
+    finally { if (epoch === state.epoch && sequence === state.investigationSequence) { state.investigationBusy = false; updateInvestigationControls(); } }
   }
   function validConstraints(value) {
     return value && Number.isSafeInteger(value.budget_cents) && value.budget_cents >= 1 && value.budget_cents <= 1000000 && Number.isFinite(value.time_budget_minutes) && value.time_budget_minutes > 0 && value.time_budget_minutes <= 1440 && ["walk", "drive"].includes(value.travel_mode) && [1, 2].includes(value.max_stores);
@@ -481,7 +677,8 @@
   function newSession() {
     if (state.saving || state.starting) return;
     if (Object.keys(state.assignments).length && !window.confirm("Start a new challenge? Saved choices stay in the experiment; this browser will leave the current session.")) return;
-    state.epoch++; state.evalSequence++; state.recommendationSequence++; state.chatSequence++;
+    state.epoch++; state.evalSequence++; state.recommendationSequence++; state.chatSequence++; state.investigationSequence++;
+    state.investigation = null; state.investigationBusy = false; state.investigationNeedsSync = false; state.setupInitialized = false;
     state.walletProfileId = ""; renderWalletSelection();
     state.session = null; state.token = ""; state.assignments = {}; state.choices = []; state.evaluation = null; state.constraints = null; state.evaluating = false; state.saving = false; state.lastSavedKey = "";
     storageWrite(STORE_KEY, null); clearPending(); state.chatMessages = []; state.chatProposal = null; state.chatPending = {}; chatBusy(false); $("chat-input").value = ""; $("chat-proposal").hidden = true; $("chat-history").replaceChildren(); $("chat-status").textContent = "";
@@ -513,6 +710,8 @@
     } catch (error) { notice("global-error", error.message); $("reload").hidden = false; }
     finally { $("loading").hidden = true; }
   }
+  $("investigation-form").addEventListener("submit", runInvestigation);
+  $("investigation-form").querySelectorAll("input").forEach((input) => input.addEventListener("change", investigationSettingChanged));
   $("wallet-profile").addEventListener("change", () => {
     if (state.starting) { renderWalletSelection(); return; }
     state.walletProfileId = state.wallets.some((item) => item.id === $("wallet-profile").value) ? $("wallet-profile").value : "";

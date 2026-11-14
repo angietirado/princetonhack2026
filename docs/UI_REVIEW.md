@@ -56,3 +56,10 @@ Testing used Chromium in Docker because native Windows browser automation failed
 The eighth browser test creates a demo session and submits an initial choice, then sends “one store only” through the chat form. The returned proposal has a one-store constraint while the active form retains two stores and the database still contains exactly one choice. Applying the proposal changes only the draft; only the explicit revised Save creates a second choice. The original choice retains its original constraints. Reload restores both the two-message conversation and the applied one-store constraint. No JavaScript, asset, or CSP errors occurred.
 
 Desktop and 375 px chat screenshots were inspected. Proposal text, plan buttons, quick requests, textarea, and explicit Apply/Save wording are legible and remain within the viewport. Element-level mobile chat capture may include the known offscreen skip-link stitching artifact; it does not appear in the active viewport.
+## Participant investigation review — November 14
+
+The parent inspected the actual mobile Chromium artifacts for the protected-limit flow and the realistic $45/15-minute money-versus-time example. All controls and proposal details fit the viewport. The latter was captured as a normal viewport at mobile width to avoid the known fixed-skip-link stitching artifact.
+
+The meaningful browser checks passed: protected limits produce no forbidden alternative; applying a valid proposal changes only the draft; saving is a separate request; changed drafts disable old proposals; the money-versus-time answer highlights a computed option without changing the budget; changed-limit revisions are not counted as comparable savings. The read-only API contract review by a separate agent found no blockers. Forty-one participant regression tests passed.
+
+Artifacts: `.data/browser-artifacts/participant-investigation-mobile.png` and `.data/browser-artifacts/participant-tradeoff-mobile.png`. The first element capture contains the previously documented skip-link stitch artifact; it is not live overflow and accessibility links were preserved.
