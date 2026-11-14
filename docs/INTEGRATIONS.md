@@ -50,6 +50,24 @@ The generator returns the run state as supplied by Nessie. If it is still runnin
 
 The default Ledgerly dashboard now prompts for `APP_API_TOKEN` when the backend requires it. The token stays in page memory and is cleared on lock or reload. All charts and tables use `/api/v1/dashboard` and the customer pinned in TOML. The API docs also support the **Authorize** button. The separate React scaffold is not the Docker-served dashboard.
 
+### Financial source limits
+
+Each spending snapshot is complete or rejected: the loader never truncates a source to return partial financial totals. The fixture and Nessie paths enforce these fixed demo limits before deduplication or customer filtering, so duplicate and foreign records still consume the budget:
+
+| Limit | Maximum |
+| --- | --- |
+| Fixture bytes, or all HTTP response bodies combined per load | 4 MiB |
+| One HTTP page body | 1 MiB |
+| Returned records per page | 100 |
+| Pages and raw records per collection | 100 pages; 10,000 records |
+| Raw records across accounts, merchants, and transactions | 30,000 |
+| Pagination cursor | 2,048 UTF-8 bytes |
+| Aggregate load deadline | 30 seconds, with the existing 15-second HTTP phase timeout |
+
+HTTP pages use [context-managed streaming](https://www.python-httpx.org/async/#streaming-responses), with actual body bytes checked before buffering. Requests specify `Accept-Encoding: identity`; a server returning compressed content is rejected before decoding, because a decoded-byte counter alone cannot bound a decompressor's temporary allocation. Bodies must be UTF-8 JSON with explicit `items` lists. Missing or malformed page items, duplicate JSON keys, invalid cursors, and incomplete pagination fail the entire read. Fixture reads are bounded in binary mode and leave the file unchanged.
+
+When one collection fails or the caller cancels, the load cancels and awaits its remaining collection tasks before closing their shared HTTP client. Resource, format, and deadline failures return a generic 503 response; HTTPX transport/status failures retain the existing generic 502 response. These are per-load input limits, not a process-memory or global-concurrency guarantee. The deadline is cooperative: synchronous file access, parsing, normalization, and cancellation-suppressing transports cannot be forcibly interrupted. A deadline check after synchronous work prevents a late successful result.
+
 ## Photon 2.0 Beta quick controls
 
 The receiver and a one-job worker are implemented. Leave `photon_enabled = false` until you configure a channel, credentials, and the enrolled sender. Nothing starts an outbound worker automatically. Offline tests use signed synthetic events and mock transport; live delivery has not been tested.
