@@ -170,7 +170,8 @@
     if (!sessions.length) { emptyRow('session-table', 6, state.offset ? 'No sessions on this page. Return to the previous page.' : 'No sessions match the current filters.'); updatePagination(); return; }
     $('session-table').replaceChildren(...sessions.map((s) => {
       const row = make('tr'), identity = make('td'), progress = make('td'), costs = make('td', 'cost-comparison'), detail = make('td');
-      identity.append(make('span', 'session-id', shortId(s.id)), make('p', 'session-scenario', s.scenario_name || s.scenario_id));
+      const identityButton = make('button', 'session-id session-id-link', shortId(s.id)); identityButton.type = 'button'; identityButton.dataset.sessionId = s.id; identityButton.setAttribute('aria-label', 'View session ' + shortId(s.id));
+      identity.append(identityButton, make('p', 'session-scenario', s.scenario_name || s.scenario_id));
       if (s.is_demo) identity.append(make('span', 'tag tag-demo', 'Demo'));
       const started = make('td', 'session-time', formattedDate(s.created_at)); started.title = 'Shown in your local time zone';
       progress.append(make('span', 'tag' + (!s.initial ? ' tag-muted' : ''), s.latest_revised ? 'Revised' : s.initial ? 'Initial submitted' : 'Started'));

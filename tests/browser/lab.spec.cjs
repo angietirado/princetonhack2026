@@ -111,7 +111,7 @@ test('desktop participant choices persist and appear only in demo analytics', as
   await expect(desk.locator('#results')).toHaveAttribute('aria-busy', 'false');
   await desk.locator('#scenario-filter').selectOption(session.scenario.id);
   await expect(desk.locator('#results')).toHaveAttribute('aria-busy', 'false');
-  const open = desk.locator('#session-table button[data-session-id="' + session.id + '"]');
+  const open = desk.locator('#session-table .session-id-link[data-session-id="' + session.id + '"]');
   await expect(open).toBeVisible();
   await open.click();
   await expect(desk.locator('#session-dialog')).toBeVisible();

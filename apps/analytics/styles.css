@@ -16,3 +16,4 @@ main{max-width:1440px;margin:auto;padding:0 48px}.hero{display:grid;grid-templat
 
 /* Store IDs belong to scenarios; preserve their visible context in aggregate views. */
 .store-label{min-width:0}.store-label strong{display:block}.store-scenario{display:block;margin-top:3px;color:var(--muted);font-size:.64rem;line-height:1.4;overflow-wrap:anywhere}
+.session-id-link{padding:6px 0;border:0;background:transparent;color:var(--forest);text-align:left;cursor:pointer;text-decoration:underline;text-underline-offset:3px}.session-id-link:hover{color:var(--ink)}.session-id-link:focus-visible{outline:2px solid var(--forest);outline-offset:3px;border-radius:3px}
