@@ -120,10 +120,12 @@ Results include recorded rent ranges, source evidence, coverage limits, and asso
 
 For a live Matterport evidence read, also set `matterport_enabled = true`, fill the backend API key/token pair, and recreate the backend. `POST /api/v1/costar/inspect` accepts the same search `criteria` plus a returned `property_id` and `floor_plan_id`. It resolves an unambiguous catalog model itself; callers cannot supply a model ID, URL, or GraphQL. The AI gains an `inspect_floor_plan` tool when this is enabled. Rooms and measurements retain their returned units; null dimensions remain unknown. Area alone does not prove furniture fit. No booking, room-boundary/obstacle inspection, or Vexcel imagery extraction is implemented.
 
+Eligible apartment rows in **Ask your books** also offer **Inspect this floor plan**. This reads the selected plan directly without another model question and displays its measurements separately from the AI answer. The selection retains the search filters and catalog revision; changed or mismatched evidence requires a fresh search. **Stop waiting** discards any later response but does not guarantee cancellation of a provider request already in progress.
+
 You can also ask the running API from the backend terminal:
 
 ```sh
-docker compose --env-file .env -p princeton-langchain-20261114 exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas under 1800 USD monthly, then inspect one catalog-linked floor plan."
+docker compose --env-file .env -p princeton-langchain-20261114 exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas under 1800 USD monthly with a verified floor-plan model reference, then inspect one unambiguous plan."
 ```
 
 The terminal sends one authenticated request to the same local API and prints the answer, evidence, and limitations. It exits unsuccessfully for incomplete answers. The full question is required on each call; no conversation memory is stored.

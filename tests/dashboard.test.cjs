@@ -273,7 +273,8 @@ function askRoute(url) {
 
 test("Ask loads status only on navigation, and example buttons never submit", async (t) => {
   let housing = false;
-  const app = boot(t, (url) => url === "/api/v1/agent/status" ? response(agentStatus({ costar_enabled: housing })) : askRoute(url));
+  let inspection = false;
+  const app = boot(t, (url) => url === "/api/v1/agent/status" ? response(agentStatus({ costar_enabled: housing, matterport_enabled: inspection })) : askRoute(url));
   await tick();
   assert.equal(app.calls.length, 1);
   await openAsk(app);
@@ -291,7 +292,13 @@ test("Ask loads status only on navigation, and example buttons never submit", as
   assert.equal(app.get("ask-example-housing").classList.contains("hidden"), false);
   app.click("ask-example-housing");
   assert.match(app.get("ask-question").value, /one-bedroom apartments in TX/);
+  assert.doesNotMatch(app.get("ask-question").value, /verified floor-plan model references/);
   assert.equal(app.calls.length, 3);
+  inspection = true;
+  app.click("ask-check"); await tick(); app.click("ask-example-housing");
+  assert.match(app.get("ask-question").value, /only plans with verified floor-plan model references/);
+  assert.match(app.get("ask-question").value, /Do not inspect yet; I will choose a floor plan/);
+  assert.equal(app.calls.length, 4);
   assert.equal(app.calls.some((call) => call.options.method === "POST"), false);
 });
 
@@ -502,4 +509,273 @@ test("housing and scan evidence preserve full rent ranges, units, unknowns, and 
   assert.match(evidence.textContent, /Only 1 of 2 rooms/);
   assert.equal(app.get("ask-result").querySelector("img, a, script, iframe"), null);
   assert.equal(evidence.querySelectorAll("details").length, 2);
+});
+
+function selectionCriteria(overrides = {}) {
+  return { state: "TX", city: null, bedrooms: 1, max_monthly_rent_usd: 1800,
+    min_square_feet: 0, limit: 2, require_floor_plan_model: true,
+    include_specialized_housing: false, ...overrides };
+}
+function shortlistAnswer() {
+  const row = { property_id: 20, floor_plan_id: 30, property_name: "Synthetic Place",
+    floor_plan_name: "Study plan", asking_rent: { minimum: 1200, maximum: 1700, currency: "USD", period: "month", basis: "per_unit" },
+    price_range_within_budget: true, matterport: { scope: "floor_plan", model_ids: ["m-one", "m-two"],
+      model_reference_count: 2, same_property_catalog_checked: true, shared_across_properties: false,
+      shared_across_floor_plans: false } };
+  return agentAnswer({ answer: "Two recorded floor plans; inspect one to see available measurements.",
+    evidence: [{ tool: "costar_search", arguments: { limit: 2 }, result: {
+      status: "ok", source_kind: "costar_local_snapshot", source_hash: "a".repeat(64),
+      criteria: selectionCriteria(), results: [row, { ...structuredClone(row), property_id: 21,
+        floor_plan_id: 31, floor_plan_name: "Second plan" }], limitations: ["Recorded availability only."] } }] });
+}
+function inspectionResponse(overrides = {}) {
+  return { status: "ok", source_kind: "matterport_model_api", property_id: 20, floor_plan_id: 30,
+    model_id: "m-one", catalog_source_hash: "a".repeat(64), models_requested: 1, models_inspected: 1,
+    verified_reference_count: 2, all_referenced_models_inspected: false,
+    geometry_clearance_verified: false, current_unit_availability_verified: false,
+    rooms_returned: 1, room_count: 2, rooms_truncated: true, rooms: [{ room_id: "r", label: "Study",
+      dimension_estimates: null, legacy_dimensions: { area_floor: 100, area_unit: "square_feet",
+        width: null, depth: null, length_unit: "feet" } }],
+    limitations: ["No furniture fit or live unit availability was verified."], ...overrides };
+}
+async function showShortlist(app) {
+  await tick(); await openAsk(app); typeQuestion(app, "Find an apartment in TX under $1800.");
+  app.submit("ask-form"); await tick();
+}
+function inspectionRoute(url) {
+  if (url === "/api/v1/agent/status") return response(agentStatus({ costar_enabled: true, matterport_enabled: true }));
+  if (url === "/api/v1/agent/answer") return response(shortlistAnswer());
+  if (url === "/api/v1/costar/inspect") return response(inspectionResponse());
+  return askRoute(url);
+}
+
+test("direct floor-plan inspection sends original canonical selection without another AI call", async (t) => {
+  const app = boot(t, (url, options) => options.headers.Authorization === "Bearer selection-token" ? inspectionRoute(url) : response({}, 401));
+  await tick();
+  app.get("app-token").value = "selection-token"; app.submit("access-form"); await tick();
+  await showShortlist(app);
+  const aiText = app.get("ask-answer").textContent;
+  const aiUsage = app.get("ask-usage").textContent;
+  typeQuestion(app, "Edited draft asking about California under a different budget.");
+  const buttons = app.document.querySelectorAll(".inspect-floor-plan");
+  assert.equal(buttons.length, 2);
+  buttons[0].click(); await tick();
+  const request = app.calls.at(-1);
+  assert.equal(request.url, "/api/v1/costar/inspect");
+  assert.equal(request.options.method, "POST");
+  assert.equal(request.options.headers.Authorization, "Bearer selection-token");
+  assert.equal(request.options.headers["Content-Type"], "application/json");
+  assert.equal(request.options.redirect, "error");
+  assert.deepEqual(JSON.parse(request.options.body), { criteria: selectionCriteria(), property_id: 20, floor_plan_id: 30 });
+  assert.equal(app.calls.filter((call) => call.url === "/api/v1/agent/answer").length, 1);
+  assert.equal(app.get("ask-answer").textContent, aiText);
+  assert.equal(app.get("ask-usage").textContent, aiUsage);
+  assert.match(app.get("inspection-title").textContent, /Direct Matterport evidence/);
+  assert.match(app.get("inspection-selection").textContent, /Property 20 \/ Floor plan 30/);
+  assert.match(app.get("inspection-evidence").textContent, /Dimension estimates unavailable/);
+  assert.match(app.get("inspection-evidence").textContent, /100 square feet; width: unknown; depth: unknown/);
+  assert.match(app.get("inspection-evidence").textContent, /Only 1 of 2 rooms/);
+  assert.match(app.get("inspection-evidence").textContent, /1 of 2 referenced models/);
+  assert.match(app.get("inspection-evidence").textContent, /Furniture fit and clear routes were not verified/);
+  const exact = JSON.parse(app.get("inspection-evidence").querySelector("pre").textContent);
+  assert.deepEqual(exact.request, JSON.parse(request.options.body));
+  assert.deepEqual(exact.response, inspectionResponse());
+  assert.equal(Object.hasOwn(exact, "tool"), false);
+  assert.equal(app.window.localStorage.length, 0);
+  assert.doesNotMatch(app.document.documentElement.outerHTML, /selection-token/);
+});
+
+test("inspection action requires enabled service and complete unambiguous server selection", async (t) => {
+  let body = shortlistAnswer();
+  let enabled = true;
+  const app = boot(t, (url) => {
+    if (url === "/api/v1/agent/status") return response(agentStatus({ costar_enabled: true, matterport_enabled: enabled }));
+    if (url === "/api/v1/agent/answer") return response(body);
+    return inspectionRoute(url);
+  });
+  await tick(); await openAsk(app); typeQuestion(app);
+  const corruptions = [
+    (result) => { delete result.criteria; },
+    (result) => { result.criteria = {}; },
+    (result) => { result.criteria.model_id = "other-model"; },
+    (result) => { delete result.source_hash; },
+    (result) => { result.source_hash = "not-a-hash"; },
+    (result) => { result.source_kind = "model_invented"; },
+    (result) => { result.results[0].property_id = true; },
+    (result) => { result.results[0].floor_plan_id = 0; },
+    (result) => { result.results[0].matterport.scope = "community_only"; },
+    (result) => { result.results[0].matterport.shared_across_floor_plans = true; },
+    (result) => { result.results[0].matterport.shared_across_properties = true; },
+    (result) => { delete result.results[0].matterport.same_property_catalog_checked; },
+    (result) => { result.results[0].matterport.model_ids = []; },
+  ];
+  for (const corrupt of corruptions) {
+    body = shortlistAnswer(); body.evidence[0].result.results.length = 1;
+    corrupt(body.evidence[0].result);
+    app.submit("ask-form"); await tick();
+    assert.equal(app.document.querySelectorAll(".inspect-floor-plan").length, 0);
+  }
+  body = shortlistAnswer(); enabled = false;
+  app.click("ask-check"); await tick(); app.submit("ask-form"); await tick();
+  assert.equal(app.document.querySelectorAll(".inspect-floor-plan").length, 0);
+  assert.equal(app.calls.some((call) => call.url === "/api/v1/costar/inspect"), false);
+});
+
+test("applied catalog filters display returned values even when they differ from the question", async (t) => {
+  const body = shortlistAnswer();
+  body.answer = "Here are apartments under your $1000 budget.";
+  body.evidence[0].arguments = { max_monthly_rent_usd: 1000 };
+  body.evidence[0].result.criteria = selectionCriteria({ city: "Austin", min_square_feet: 650 });
+  const app = boot(t, (url) => url === "/api/v1/agent/answer" ? response(body) : inspectionRoute(url));
+  await tick(); await openAsk(app); typeQuestion(app, "Find apartments under $1000.");
+  app.submit("ask-form"); await tick();
+  assert.match(app.get("ask-asked-question").textContent, /under \$1000/);
+  const summary = app.get("ask-evidence").querySelector(".ask-applied-criteria");
+  assert.match(summary.textContent, /TX, Austin; 1 bedroom/);
+  assert.match(summary.textContent, /advertised starting rent at most \$1,800 per month, per unit/);
+  assert.match(summary.textContent, /at least 650 square feet; up to 2 results/);
+  assert.match(summary.textContent, /verified floor-plan model references required; specialized housing excluded/);
+  assert.match(summary.textContent, /Compare these applied filters with your question/);
+  assert.doesNotMatch(summary.textContent, /\$1,?000/);
+});
+
+test("availability recheck hides existing inspection actions when Matterport becomes disabled", async (t) => {
+  let enabled = true;
+  const app = boot(t, (url) => url === "/api/v1/agent/status" ? response(agentStatus({ costar_enabled: true, matterport_enabled: enabled })) : inspectionRoute(url));
+  await showShortlist(app);
+  const button = app.document.querySelector(".inspect-floor-plan");
+  assert.equal(button.classList.contains("hidden"), false);
+  enabled = false; app.click("ask-check"); await tick();
+  assert.equal(button.classList.contains("hidden"), true);
+  assert.equal(button.disabled, true);
+  button.dispatchEvent(new app.window.MouseEvent("click", { bubbles: true })); await tick();
+  assert.equal(app.calls.some((call) => call.url === "/api/v1/costar/inspect"), false);
+});
+
+test("an inspection blocks concurrent selections and questions, then cancel ignores a late reply", async (t) => {
+  let finish;
+  const app = boot(t, (url) => url === "/api/v1/costar/inspect" ? new Promise((resolve) => { finish = resolve; }) : inspectionRoute(url));
+  await showShortlist(app);
+  const buttons = app.document.querySelectorAll(".inspect-floor-plan");
+  buttons[0].click();
+  const pending = app.calls.at(-1);
+  assert.equal(app.get("ask-submit").disabled, true);
+  assert.equal(app.get("ask-check").disabled, true);
+  assert.equal(buttons[1].disabled, true);
+  assert.equal(app.get("inspection-result").getAttribute("aria-busy"), "true");
+  buttons[1].dispatchEvent(new app.window.Event("click"));
+  app.submit("ask-form");
+  assert.equal(app.calls.filter((call) => call.url === "/api/v1/costar/inspect").length, 1);
+  assert.equal(app.calls.filter((call) => call.url === "/api/v1/agent/answer").length, 1);
+  app.click("inspection-cancel");
+  assert.equal(pending.options.signal.aborted, true);
+  assert.equal(app.get("ask-submit").disabled, false);
+  assert.equal(buttons[1].disabled, false);
+  finish(response(inspectionResponse())); await tick();
+  assert.equal(app.get("inspection-evidence").children.length, 0);
+  assert.match(app.get("inspection-state").textContent, /Stopped waiting/);
+});
+
+test("inspection rejects changed catalog revisions and mismatched identities without rendering measurements", async (t) => {
+  let result = inspectionResponse();
+  const app = boot(t, (url) => url === "/api/v1/costar/inspect" ? response(result) : inspectionRoute(url));
+  await showShortlist(app);
+  for (const override of [{ catalog_source_hash: "b".repeat(64) }, { property_id: 999 },
+    { floor_plan_id: 999 }, { model_id: "unrelated-model" }, { source_kind: "other-source" },
+    { geometry_clearance_verified: true }]) {
+    result = inspectionResponse(override);
+    app.document.querySelector(".inspect-floor-plan").click(); await tick();
+    assert.equal(app.get("inspection-evidence").children.length, 0);
+    assert.equal(app.get("inspection-source").textContent, "");
+    assert.ok(app.get("inspection-error").textContent);
+    if (override.catalog_source_hash) assert.match(app.get("inspection-error").textContent, /catalog changed.*fresh apartment search/);
+    assert.doesNotMatch(app.get("inspection-result").textContent, /100 square feet/);
+  }
+});
+
+test("inspection errors are sanitized and do not trigger model calls or automatic retries", async (t) => {
+  let failure = 422;
+  let bodyReads = 0;
+  const app = boot(t, (url) => {
+    if (url !== "/api/v1/costar/inspect") return inspectionRoute(url);
+    if (failure === "network") throw new Error("PRIVATE_API_TOKEN");
+    return { ok: false, status: failure, json: async () => { bodyReads++; return { detail: "PRIVATE_API_TOKEN" }; } };
+  });
+  await showShortlist(app);
+  for (failure of [403, 422, 429, 503, 504, 500, "network"]) {
+    const count = app.calls.length;
+    app.document.querySelector(".inspect-floor-plan").click(); await tick();
+    assert.equal(app.calls.length, count + 1);
+    assert.ok(app.get("inspection-error").textContent);
+    assert.doesNotMatch(app.document.body.textContent, /PRIVATE_API_TOKEN/);
+    assert.equal(app.get("inspection-evidence").children.length, 0);
+  }
+  assert.equal(bodyReads, 0);
+  assert.equal(app.calls.filter((call) => call.url === "/api/v1/agent/answer").length, 1);
+});
+
+test("inspection auth failure locks and clears both AI and direct evidence", async (t) => {
+  const app = boot(t, (url) => url === "/api/v1/costar/inspect" ? response({}, 401) : inspectionRoute(url));
+  await showShortlist(app);
+  app.document.querySelector(".inspect-floor-plan").click(); await tick();
+  assert.equal(app.get("access-panel").classList.contains("hidden"), false);
+  for (const id of ["ask-answer", "inspection-selection", "inspection-source"]) assert.equal(app.get(id).textContent, "");
+  assert.equal(app.get("ask-evidence").children.length, 0);
+  assert.equal(app.get("inspection-evidence").children.length, 0);
+  assert.equal(app.get("inspection-result").classList.contains("hidden"), true);
+});
+
+for (const reset of ["refresh", "lock", "token"]) {
+  test("late inspection JSON cannot restore selection after " + reset, async (t) => {
+    let finishJson;
+    const app = boot(t, (url) => url === "/api/v1/costar/inspect" ? { ok: true, status: 200, json: () => new Promise((resolve) => { finishJson = resolve; }) } : inspectionRoute(url));
+    await showShortlist(app);
+    app.document.querySelector(".inspect-floor-plan").click(); await tick();
+    const pending = app.calls.at(-1);
+    if (reset === "refresh") app.click("refresh-button");
+    else if (reset === "lock") app.click("lock-button");
+    else { app.get("app-token").value = "replacement-token"; app.submit("access-form"); }
+    await tick();
+    finishJson(inspectionResponse()); await tick();
+    assert.equal(pending.options.signal.aborted, true);
+    assert.equal(app.get("inspection-result").classList.contains("hidden"), true);
+    assert.equal(app.get("inspection-evidence").children.length, 0);
+    assert.equal(app.get("inspection-selection").textContent, "");
+    assert.equal(app.get("ask-question").value, "");
+  });
+}
+
+test("old shortlist cards cannot inspect after a new question replaces their context", async (t) => {
+  const app = boot(t, inspectionRoute);
+  await showShortlist(app);
+  const oldButton = app.document.querySelector(".inspect-floor-plan");
+  oldButton.click(); await tick();
+  assert.equal(app.get("inspection-evidence").children.length, 1);
+  typeQuestion(app, "Find a different apartment."); app.submit("ask-form"); await tick();
+  assert.equal(app.get("inspection-result").classList.contains("hidden"), true);
+  assert.equal(app.get("inspection-evidence").children.length, 0);
+  const before = app.calls.length;
+  oldButton.disabled = false;
+  oldButton.dispatchEvent(new app.window.Event("click"));
+  assert.equal(app.calls.length, before);
+});
+
+test("inspection deadline releases controls, rejects its late response, and performs no retry", async (t) => {
+  let finish;
+  const timers = [];
+  const app = boot(t, (url) => url === "/api/v1/costar/inspect" ? new Promise((resolve) => { finish = resolve; }) : inspectionRoute(url));
+  await showShortlist(app);
+  app.window.setTimeout = (fn, milliseconds) => { timers.push({ fn, milliseconds }); return timers.length; };
+  app.document.querySelector(".inspect-floor-plan").click();
+  const pending = app.calls.at(-1);
+  const count = app.calls.length;
+  timers.find((timer) => timer.milliseconds === 35000).fn();
+  assert.equal(pending.options.signal.aborted, true);
+  assert.match(app.get("inspection-error").textContent, /timed out/);
+  assert.equal(app.get("ask-submit").disabled, false);
+  assert.equal(app.get("inspection-cancel").classList.contains("hidden"), true);
+  assert.equal(app.calls.length, count);
+  finish(response(inspectionResponse())); await tick();
+  assert.equal(app.get("inspection-evidence").children.length, 0);
+  assert.match(app.get("inspection-error").textContent, /timed out/);
 });

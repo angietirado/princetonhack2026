@@ -48,7 +48,11 @@ class CostarSearchCriteria(BaseModel):
     max_monthly_rent_usd: int = Field(default=1800, ge=1, le=100_000)
     min_square_feet: int = Field(default=0, ge=0, le=10_000)
     limit: int = Field(default=5, ge=1, le=20)
-    require_floor_plan_model: bool = False
+    require_floor_plan_model: bool = Field(
+        default=False,
+        description="Require a verified floor-plan model reference for later room inspection. "
+        "Shared references may still be unsuitable for inspection.",
+    )
     include_specialized_housing: bool = False
 
     @field_validator("city")

@@ -31,12 +31,15 @@ Use `http://127.0.0.1:8765/docs` or `/openapi.json` for the authoritative schema
 | `/api/v1/spending/recurring` | Array of recurring candidates with evidence transaction IDs |
 | `GET /api/v1/agent/status` | Availability, selected provider/model, and enabled catalog/inspection capabilities |
 | `POST /api/v1/agent/answer` | Independent question result: status, answer, bounded tool evidence, and limitations |
+| `POST /api/v1/costar/inspect` | Direct measurements for a selected catalog property/floor-plan pair |
 
 The dashboard and spending/transaction routes accept optional `start` and `end` in `YYYY-MM-DD` format. Dates are inclusive and use UTC. Invalid ranges return `422`; upstream failure returns `502`; a missing fixture returns `503`. Categories are `{ category, amount_cents }`, sorted by amount descending. Empty windows return zero totals and empty categories. Net amounts may be negative after refunds. Account balances are current, independent of the selected transaction period.
 
 Format cents with `Intl.NumberFormat`, dividing by 100 at display time. Preserve `source` visibly so fixture data is identified as synthetic. All requests are scoped by the backend; there is no client-supplied customer selector in this single-user scaffold.
 
 **Ask your books** checks availability when opened and submits only an explicit question. It renders model output and exact tool evidence as text. The question body accepts only `question`; include dates and filters in that text because dashboard date controls and earlier questions are not inherited. Locking or refreshing aborts pending browser reads and clears the question, answer, and evidence. Backend work may finish after a browser disconnects. Enable the optional assistant using the [integration setup](../../docs/INTEGRATIONS.md#ai-agents).
+
+With Matterport enabled, eligible catalog results offer a direct inspection button. It preserves the returned filters and selected IDs, rejects mismatched model/catalog evidence, and displays measurements outside the AI answer. Community or example-unit references are not eligible; request verified floor-plan model references when the goal is room inspection. Stopping the wait discards late responses without promising that an already-issued provider read was cancelled.
 
 Fixture mode requires no authentication unless `APP_API_TOKEN` is set. The dashboard prompts for this token on a `401`, holds it only in page memory, and sends a bearer header. Lock/reload clears it; no token is put in localStorage, sessionStorage, or bundled code. Production user enrollment remains a later decision. Never place a Nessie or Photon key in a `VITE_` variable.
 

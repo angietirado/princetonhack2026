@@ -95,6 +95,12 @@
             <h3>Limits and caveats</h3><ul id="ask-caveats" class="ask-caveats"></ul>
             <h3>Supporting evidence</h3><p class="chart-note">These tool results support the AI interpretation above. Expand a record to review exact dates, amounts, IDs, and units.</p><div id="ask-evidence"></div>
           </section>
+          <section id="inspection-result" class="panel ask-result direct-inspection hidden" aria-labelledby="inspection-title">
+            <p class="ask-label">Your selected floor plan</p><div class="inspection-heading"><h2 id="inspection-title">Direct Matterport evidence</h2><button type="button" id="inspection-cancel" class="outline-button hidden">Stop waiting</button></div>
+            <p class="chart-note">This is a direct evidence read for your selection. It does not generate another AI answer or verify furniture fit or current availability.</p>
+            <p id="inspection-selection" class="ask-asked-question"></p><p id="inspection-state" class="ask-state" role="status" aria-live="polite"></p><p id="inspection-error" role="alert"></p>
+            <p id="inspection-source" class="ask-meta"></p><div id="inspection-evidence"></div>
+          </section>
         </section>
         <section class="page hidden" id="settings-view"><div class="page-heading"><div><p class="eyebrow">Workspace</p><h1>Connected accounts</h1><p class="subheading">The same customer is used across every view.</p></div></div><section class="panel"><h2>Data connection</h2><dl class="connection-details"><dt>Source</dt><dd id="connection-source"></dd><dt>Customer</dt><dd id="connection-customer"></dd><dt>Retrieved</dt><dd id="connection-time"></dd></dl><p class="chart-note">Balances reflect the latest account snapshot. Date filters apply to transaction history.</p></section><div class="insight-cards" id="accounts-list"></div></section>
       </div>

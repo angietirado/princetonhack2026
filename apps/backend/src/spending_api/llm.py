@@ -48,6 +48,8 @@ transaction tool when asked for individual evidence; disclose any truncation. Re
 results are candidates only: no cancellation savings or guaranteed next bill. Catalog
 rent is recorded whole-unit monthly asking rent, not a live quote or a personal budget
 recommendation. Matterport references are metadata, not inspected interior geometry.
+When searching for plans to inspect, set require_floor_plan_model=true; community-only
+or example-unit references cannot support the inspect_floor_plan tool.
 When inspect_floor_plan returns measurements, distinguish legacy measurements from
 dimension estimates and preserve each returned unit. Missing or zero measurements
 do not establish a zero-sized room. Floor area alone cannot prove desk/furniture fit;
