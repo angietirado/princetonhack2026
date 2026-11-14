@@ -7,10 +7,11 @@ nessie_base_url = "https://v2-prod-api.nessieisreal.com"
 nessie_customer_id = "cust_01m7cen22b7daz0s8gkcp3mt96"
 cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
-# Phone messaging is deferred until the terminal MVP is ready.
+# Optional Photon quick controls stay disabled until credentials and IDs are configured.
 photon_enabled = false
 photon_api_base_url = "https://api.photon.codes/v1"
 photon_project_id = ""
 photon_agent_user_id = ""
 photon_allowed_sender_id = ""
+photon_platform = "sms"
 photon_inbox_path = ".data/photon-inbox.sqlite3"

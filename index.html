@@ -60,7 +60,7 @@
         </section>
         <section class="page hidden" id="transactions-view">
           <div class="page-heading"><div><p class="eyebrow">Ledger</p><h1>Transactions</h1><p class="subheading">Follow each amount back to its source.</p></div><button class="outline-button" id="export-transactions">Export filtered rows ↓</button></div>
-          <section class="panel transactions-table"><div class="table-toolbar"><div class="tabs" role="tablist" aria-label="Transaction status"><button class="tab active" role="tab" aria-selected="true" data-filter="all">All</button><button class="tab" role="tab" aria-selected="false" data-filter="completed">Completed</button><button class="tab" role="tab" aria-selected="false" data-filter="pending">Pending</button><button class="tab" role="tab" aria-selected="false" data-filter="other">Other statuses</button></div><label class="search-field"><span class="sr-only">Search transactions</span><input id="transaction-search" type="search" placeholder="Search merchant, category, or type…" /></label></div><p class="chart-note" id="transaction-count"></p><div class="table-scroll"><table class="ledger-table"><thead><tr><th>Merchant / description</th><th>Date (UTC)</th><th>Category</th><th>Amount</th><th>Status / type</th></tr></thead><tbody id="transaction-rows"></tbody></table></div><div class="pagination"><button class="outline-button" id="previous-page">← Previous</button><span id="page-count"></span><button class="outline-button" id="next-page">Next →</button></div></section>
+          <section class="panel transactions-table"><div class="table-toolbar"><div class="tabs" role="group" aria-label="Filter transactions by status"><button class="tab active" aria-pressed="true" data-filter="all">All</button><button class="tab" aria-pressed="false" data-filter="completed">Completed</button><button class="tab" aria-pressed="false" data-filter="pending">Pending</button><button class="tab" aria-pressed="false" data-filter="other">Other statuses</button></div><label class="search-field"><span class="sr-only">Search transactions</span><input id="transaction-search" type="search" placeholder="Search merchant, category, or type…" /></label></div><p class="chart-note" id="transaction-count"></p><div class="table-scroll"><table class="ledger-table"><thead><tr><th>Merchant / description</th><th>Date (UTC)</th><th>Category</th><th>Amount</th><th>Status / type</th></tr></thead><tbody id="transaction-rows"></tbody></table></div><div class="pagination"><button class="outline-button" id="previous-page">← Previous</button><span id="page-count"></span><button class="outline-button" id="next-page">Next →</button></div></section>
         </section>
         <section class="page hidden" id="insights-view">
           <div class="page-heading"><div><p class="eyebrow">Patterns, with evidence</p><h1>Insights</h1><p class="subheading">Calculated from the selected period.</p></div></div>
@@ -81,7 +81,7 @@
             <form id="ask-form">
               <label for="ask-question">Your question</label>
               <textarea id="ask-question" rows="4" maxlength="2000" required disabled aria-describedby="ask-guidance ask-counter" placeholder="Ask about a specific period, category, or transaction…"></textarea>
-              <div class="ask-actions"><span id="ask-counter">0 / 2000 characters</span><button class="dark-button" id="ask-submit" type="submit" disabled>Ask →</button></div>
+              <div class="ask-actions"><span id="ask-counter">0 / 2000 characters</span><div class="ask-action-buttons"><button class="outline-button hidden" id="ask-cancel" type="button" aria-label="Stop waiting for the answer" disabled>Stop waiting</button><button class="dark-button" id="ask-submit" type="submit" disabled>Ask →</button></div></div>
             </form>
             <div class="ask-examples" aria-label="Fill an example question"><span>Start with an example:</span><button class="outline-button" id="ask-example-spending" type="button" disabled>Spending, with loaded dates</button><button class="outline-button hidden" id="ask-example-housing" type="button" disabled>Apartment search</button></div>
             <p id="ask-state" class="ask-state" role="status" aria-live="polite"></p>
@@ -91,13 +91,17 @@
             <p class="ask-label" id="ask-outcome"></p><h2 id="ask-answer-title">Answer</h2>
             <p id="ask-asked-question" class="ask-asked-question"></p>
             <p id="ask-answer" class="ask-answer-text"></p>
-            <p id="ask-usage" class="ask-meta"></p><p id="ask-source" class="ask-meta"></p>
-            <h3>Limits and caveats</h3><ul id="ask-caveats" class="ask-caveats"></ul>
+            <div id="ask-clarification" class="ask-clarification hidden"><h3>Add these details</h3><ul id="ask-needed-inputs" class="ask-caveats"></ul><p class="chart-note">Edit and resubmit the complete question. Earlier questions and answers are not carried into a new request.</p><button id="ask-edit-question" class="outline-button" type="button" disabled>Edit this question</button></div>
+            <p id="ask-source" class="ask-source"></p>
             <h3>Supporting evidence</h3><p class="chart-note">These tool results support the AI interpretation above. Expand a record to review exact dates, amounts, IDs, and units.</p><div id="ask-evidence"></div>
+            <h3>Limits and caveats</h3><ul id="ask-caveats" class="ask-caveats"></ul>
+            <details class="ask-disclosure"><summary>Agent activity</summary><p class="chart-note">Delegation and planning are activity; supporting evidence appears above.</p><ul id="ask-activity" class="ask-caveats"></ul></details>
+            <details id="ask-technical-details" class="ask-disclosure"><summary>Technical details</summary><p id="ask-usage" class="ask-meta"></p><p id="ask-revision" class="ask-meta"></p></details>
           </section>
           <section class="panel catalog-compose" aria-labelledby="catalog-title">
-            <p class="ask-label">Choose your own filters</p><h2 id="catalog-title">Search the apartment catalog</h2>
+            <p class="ask-label">Optional recorded data</p><h2 id="catalog-title">Search the apartment catalog</h2>
             <p id="catalog-availability" class="ask-state" role="status" aria-live="polite">Check availability above to search.</p>
+            <div id="catalog-controls" class="hidden">
             <p id="catalog-guidance" class="ask-guidance">Search directly without an AI model. The rent filter checks the advertised starting rent per unit, not the full rent range or your total housing costs. Recorded availability is not live.</p>
             <form id="catalog-form" novalidate aria-describedby="catalog-guidance">
               <div class="catalog-fields">
@@ -107,22 +111,16 @@
                 <label for="catalog-rent">Maximum starting rent (USD / month / unit)<input id="catalog-rent" type="number" min="1" max="100000" step="1" required value="1800" disabled /></label>
                 <label for="catalog-area">Minimum area (square feet, optional)<input id="catalog-area" type="number" min="0" max="10000" step="1" placeholder="No minimum" disabled /></label>
               </div>
-              <label class="catalog-checkbox" for="catalog-model"><input id="catalog-model" type="checkbox" disabled /> Require verified floor-plan model references</label>
-              <p class="chart-note">Up to 3 recorded matches. Specialized housing is excluded. A model reference does not establish room dimensions or furniture fit.</p>
+              <p class="chart-note">Up to 3 recorded matches. Specialized housing is excluded.</p>
               <div class="ask-actions"><button id="catalog-cancel" class="outline-button hidden" type="button">Stop waiting</button><button id="catalog-submit" class="dark-button" type="submit" disabled>Search catalog</button></div>
             </form>
+            </div>
             <p id="catalog-state-message" class="ask-state" role="status" aria-live="polite"></p><p id="catalog-error" role="alert"></p>
           </section>
           <section id="catalog-result" class="panel ask-result direct-catalog hidden" aria-labelledby="catalog-result-title">
             <p class="ask-label">Your explicit search</p><h2 id="catalog-result-title">Direct catalog results</h2>
             <p class="chart-note">These records match the filters submitted by this form. No AI answer or model call was generated.</p>
             <p id="catalog-source" class="ask-meta"></p><div id="catalog-evidence"></div>
-          </section>
-          <section id="inspection-result" class="panel ask-result direct-inspection hidden" aria-labelledby="inspection-title">
-            <p class="ask-label">Your selected floor plan</p><div class="inspection-heading"><h2 id="inspection-title">Direct Matterport evidence</h2><button type="button" id="inspection-cancel" class="outline-button hidden">Stop waiting</button></div>
-            <p class="chart-note">This is a direct evidence read for your selection. It does not generate another AI answer or verify furniture fit or current availability.</p>
-            <p id="inspection-selection" class="ask-asked-question"></p><p id="inspection-state" class="ask-state" role="status" aria-live="polite"></p><p id="inspection-error" role="alert"></p>
-            <p id="inspection-source" class="ask-meta"></p><div id="inspection-evidence"></div>
           </section>
         </section>
         <section class="page hidden" id="settings-view"><div class="page-heading"><div><p class="eyebrow">Workspace</p><h1>Connected accounts</h1><p class="subheading">The same customer is used across every view.</p></div></div><section class="panel"><h2>Data connection</h2><dl class="connection-details"><dt>Source</dt><dd id="connection-source"></dd><dt>Customer</dt><dd id="connection-customer"></dd><dt>Retrieved</dt><dd id="connection-time"></dd></dl><p class="chart-note">Balances reflect the latest account snapshot. Date filters apply to transaction history.</p></section><div class="insight-cards" id="accounts-list"></div></section>

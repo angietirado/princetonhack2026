@@ -1,7 +1,6 @@
 """Offline fixtures exercise catalog semantics without copying the supplied data."""
 
 import copy
-import csv
 import hashlib
 import json
 import threading
@@ -13,16 +12,12 @@ from pydantic import ValidationError
 from spending_api.costar import FILES, CostarCatalog, CostarSearchCriteria
 
 
-def attachment(key="scan-one", kind=36):
-    return {"videoExternalReferenceType": kind, "videoKey": key}
-
-
 def property_row(property_id=101, plan_id=1):
     return {
         "id": property_id,
         "primaryAddress": {"state": "TX", "city": "Houston"},
         "propertyApartment": {
-            "models": [{"id": plan_id, "attachments": [attachment()], "units": []}],
+            "models": [{"id": plan_id}],
         },
         "attachments": [],
         "contacts": [{"email": "secret-contact@example.com"}],
@@ -56,15 +51,10 @@ def write_kit(directory, *, properties=None, listings=None, catalog=None):
     (directory / "data").mkdir(parents=True, exist_ok=True)
     properties = [property_row()] if properties is None else properties
     listings = [listing_row()] if listings is None else listings
-    catalog = [(101, "scan-one")] if catalog is None else catalog
     for relative, rows in ((FILES[0], listings), (FILES[1], properties)):
         (directory / relative).write_text(
             "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
         )
-    with (directory / FILES[2]).open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(["PropertyId", "MatterportModelId"])
-        writer.writerows(catalog)
     return directory
 
 
@@ -91,9 +81,6 @@ def test_exact_join_rent_and_evidence_are_snapshot_only(kit):
     assert row["recorded_units_available"] == 2
     assert row["availability_is_live"] is False
     assert row["price_range_within_budget"] is True
-    assert row["matterport"]["scope"] == "floor_plan"
-    assert row["matterport"]["model_ids"] == ["scan-one"]
-    assert row["matterport"]["interior_observation_performed"] is False
     assert row["evidence"][0] == {
         "file": FILES[0],
         "line": 1,
@@ -225,19 +212,6 @@ def test_unknown_audience_stays_excluded_even_when_opted_in(tmp_path, audience):
     assert result["coverage"]["exclusions"] == {"housing_audience_unknown": 1}
 
 
-@pytest.mark.parametrize("scope", ["example_unit", "community_only", "no_scan"])
-def test_model_scope_never_promotes_unit_or_community_to_floor_plan(tmp_path, scope):
-    prop = property_row()
-    prop["propertyApartment"]["models"][0]["attachments"] = []
-    if scope == "example_unit":
-        prop["propertyApartment"]["models"][0]["units"] = [{"attachments": [attachment()]}]
-    if scope == "community_only":
-        prop["attachments"] = [attachment()]
-    catalog = CostarCatalog(write_kit(tmp_path, properties=[prop]))
-    assert catalog.search({})["results"][0]["matterport"]["scope"] == scope
-    assert catalog.search({"require_floor_plan_model": True})["results"] == []
-
-
 def test_same_plan_id_on_different_property_cannot_join(tmp_path):
     result = CostarCatalog(write_kit(tmp_path, properties=[property_row(102)])).search({})
     assert result["coverage"]["exclusions"] == {"property_join_missing": 1}
@@ -246,56 +220,6 @@ def test_same_plan_id_on_different_property_cannot_join(tmp_path):
 def test_existing_property_wrong_plan_cannot_join(tmp_path):
     result = CostarCatalog(write_kit(tmp_path, properties=[property_row(plan_id=2)])).search({})
     assert result["coverage"]["exclusions"] == {"floor_plan_join_missing": 1}
-
-
-def test_catalog_model_must_belong_to_same_property(tmp_path):
-    catalog = CostarCatalog(write_kit(tmp_path, catalog=[(102, "scan-one")]))
-    metadata = catalog.search({})["results"][0]["matterport"]
-    assert metadata["scope"] == "no_scan"
-    assert metadata["model_ids"] == []
-    assert metadata["unmatched_catalog_reference_count"] == 1
-    assert catalog.search({"require_floor_plan_model": True})["results"] == []
-
-
-def test_shared_model_identity_is_flagged(tmp_path):
-    prop = property_row()
-    prop["propertyApartment"]["models"].append({"id": 2, "attachments": [attachment()]})
-    result = CostarCatalog(
-        write_kit(
-            tmp_path,
-            properties=[prop],
-            catalog=[(101, "scan-one"), (102, "scan-one")],
-        )
-    ).search({})
-    metadata = result["results"][0]["matterport"]
-    assert metadata["shared_across_properties"] is True
-    assert metadata["shared_across_floor_plans"] is True
-
-
-@pytest.mark.parametrize("kind", [True, "36", 35, 0, None])
-def test_only_verified_matterport_enum_produces_reference(tmp_path, kind):
-    prop = property_row()
-    prop["propertyApartment"]["models"][0]["attachments"] = [attachment(kind=kind)]
-    result = CostarCatalog(write_kit(tmp_path, properties=[prop])).search({})
-    assert result["results"][0]["matterport"]["scope"] == "no_scan"
-
-
-def test_234_is_also_matterport(tmp_path):
-    prop = property_row()
-    prop["propertyApartment"]["models"][0]["attachments"] = [attachment(kind=234)]
-    result = CostarCatalog(write_kit(tmp_path, properties=[prop])).search({})
-    assert result["results"][0]["matterport"]["model_ids"] == ["scan-one"]
-
-
-@pytest.mark.parametrize("order", [(0, 1, 0), (1, 0, 1), (0, 0, 1)])
-def test_conflicting_model_quarantine_is_order_invariant(tmp_path, order):
-    prop = property_row()
-    model = prop["propertyApartment"]["models"][0]
-    conflict = {"id": 1, "attachments": [attachment("different")]}
-    prop["propertyApartment"]["models"] = [copy.deepcopy((model, conflict)[i]) for i in order]
-    result = CostarCatalog(write_kit(tmp_path, properties=[prop])).search({})
-    assert result["results"] == []
-    assert result["coverage"]["exclusions"] == {"conflicting_floor_plan_models": 1}
 
 
 def test_identical_duplicates_do_not_multiply_results(tmp_path):
@@ -400,23 +324,6 @@ def test_malformed_catalog_is_generic_and_no_partial_result(kit, raw):
     assert result["results"] == []
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "Wrong,Header\n101,key\n",
-        "PropertyId,PropertyId,MatterportModelId\n101,101,key\n",
-        "PropertyId,MatterportModelId\nTrue,key\n",
-        "PropertyId,MatterportModelId\n0,key\n",
-        "PropertyId,MatterportModelId\n101, key \n",
-    ],
-)
-def test_malformed_csv_is_generic(kit, raw):
-    (kit / FILES[2]).write_text(raw, encoding="utf-8")
-    result = CostarCatalog(kit).search({})
-    assert result["reason"] == "invalid_catalog"
-    assert result["results"] == []
-
-
 def test_unconfigured_missing_and_empty_catalog_are_distinct(tmp_path):
     assert CostarCatalog(None).search({})["reason"] == "not_configured"
     assert CostarCatalog(tmp_path).search({})["reason"] == "catalog_files_missing"
@@ -430,7 +337,7 @@ def test_cached_projection_and_responses_are_independent(kit):
     catalog = CostarCatalog(kit)
     first = catalog.search(CostarSearchCriteria())
     expected = copy.deepcopy(first)
-    first["results"][0]["matterport"]["model_ids"].append("forged")
+    first["results"][0]["asking_rent"]["minimum"] = 1
     first["coverage"]["source_file_sha256"].clear()
     first["limitations"].clear()
     (kit / FILES[0]).write_text("broken", encoding="utf-8")
@@ -470,23 +377,6 @@ def test_display_limit_retains_full_match_count_and_stable_sort(tmp_path):
     assert len(catalog.search({"limit": 2})["results"]) == 2
 
 
-def test_model_reference_display_cap_is_explicit(tmp_path):
-    prop = property_row()
-    keys = [f"model-{number:02}" for number in range(25)]
-    prop["propertyApartment"]["models"][0]["attachments"] = [attachment(key) for key in keys]
-    result = CostarCatalog(
-        write_kit(
-            tmp_path,
-            properties=[prop],
-            catalog=[(101, key) for key in keys],
-        )
-    ).search({})
-    metadata = result["results"][0]["matterport"]
-    assert metadata["model_ids"] == keys[:20]
-    assert metadata["model_reference_count"] == 25
-    assert metadata["model_references_truncated"] is True
-
-
 def test_concurrent_searches_load_once_and_return_independent_results(kit, monkeypatch):
     catalog = CostarCatalog(kit)
     original = catalog._load
@@ -506,10 +396,8 @@ def test_concurrent_searches_load_once_and_return_independent_results(kit, monke
         results = list(executor.map(search, range(4)))
     assert load_calls == [True]
     assert all(result == results[0] for result in results)
-    results[0]["results"][0]["matterport"]["model_ids"].clear()
-    assert all(
-        result["results"][0]["matterport"]["model_ids"] == ["scan-one"] for result in results[1:]
-    )
+    results[0]["results"][0]["asking_rent"].clear()
+    assert all(result["results"][0]["asking_rent"]["minimum"] == 1300 for result in results[1:])
 
 
 def test_failed_load_does_not_cache_partial_snapshot(kit):

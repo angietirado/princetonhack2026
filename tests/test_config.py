@@ -81,7 +81,7 @@ def test_ai_requires_selected_provider_key_and_app_token(provider, key_name):
     assert Settings(**base).llm_provider == provider
 
 
-@pytest.mark.parametrize("name", ["gemini_api_key", "nvidia_api_key", "matterport_api_token"])
+@pytest.mark.parametrize("name", ["gemini_api_key", "nvidia_api_key", "photon_api_key"])
 def test_public_ai_settings_reject_credentials(tmp_path, name):
     options = tmp_path / "settings.toml"
     options.write_text(f'{name} = "never-echo-this"\n')
@@ -97,29 +97,10 @@ def test_public_ai_settings_reject_credentials(tmp_path, name):
         ("llm_max_tool_calls", 0),
         ("llm_timeout_seconds", 1000),
         ("llm_max_output_tokens", 999999),
+        ("llm_max_total_output_tokens", 0),
         ("llm_provider", "unconfigured-provider"),
     ],
 )
 def test_ai_settings_bound_work(field, value):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, data_source="fixture", llm_enabled=False, **{field: value})
-
-
-@pytest.mark.parametrize(
-    "missing", ["costar_enabled", "matterport_api_key", "matterport_api_token", "app_api_token"]
-)
-def test_matterport_requires_catalog_and_backend_credentials(missing):
-    options = dict(
-        _env_file=None,
-        data_source="fixture",
-        llm_enabled=False,
-        costar_enabled=True,
-        matterport_enabled=True,
-        matterport_api_key="fake-id",
-        matterport_api_token="never-echo-secret",
-        app_api_token="fake-app-token",
-    )
-    options[missing] = False if missing == "costar_enabled" else ""
-    with pytest.raises(ValidationError) as error:
-        Settings(**options)
-    assert "never-echo-secret" not in str(error.value)

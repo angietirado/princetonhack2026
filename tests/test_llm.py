@@ -71,15 +71,48 @@ def call(name="summarize_spending", args=None, call_id="call-1"):
 
 
 class ScriptedModel:
-    def __init__(self, *responses, on_invoke=None):
+    def __init__(self, *responses, on_invoke=None, advisor_responses=None):
         self.responses = iter(responses)
         self.messages = []
+        self.advisor_messages = []
         self.bound = []
         self.on_invoke = on_invoke
+        self.advisor_responses = iter(advisor_responses) if advisor_responses else None
+        self.last_response = None
+        self.role = (
+            "research"
+            if responses
+            and isinstance(responses[0], AIMessage)
+            and any(row["name"] == "costar_search" for row in responses[0].tool_calls)
+            else "spending"
+        )
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, **kwargs):
+        if "task" in {tool.name for tool in tools}:
+            return SimpleNamespace(ainvoke=self.advisor)
         self.bound = tools
         return self
+
+    async def advisor(self, messages, config=None):
+        assert config == {"callbacks": []}
+        self.advisor_messages.append(copy.deepcopy(messages))
+        if self.advisor_responses:
+            return next(self.advisor_responses)
+        if len(self.advisor_messages) == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    call(
+                        "task",
+                        {
+                            "subagent_type": self.role,
+                            "description": "Read the question using authorized data tools.",
+                        },
+                        "delegate-1",
+                    )
+                ],
+            )
+        return self.last_response
 
     async def ainvoke(self, messages, config=None):
         assert config == {"callbacks": []}
@@ -89,6 +122,7 @@ class ScriptedModel:
         value = next(self.responses)
         if isinstance(value, Exception):
             raise value
+        self.last_response = value
         return value
 
 
@@ -111,7 +145,7 @@ def test_summary_exact_raw_arithmetic_and_evidence_roundtrip():
     )
     answer = run(model)
     assert answer.status == "answered"
-    assert (answer.model_calls, answer.tool_calls) == (2, 1)
+    assert (answer.model_calls, answer.tool_calls) == (4, 2)
     evidence = answer.evidence[0]["result"]
     assert evidence["net_spending_cents"] == 2000 - 500 + 100
     assert evidence["included_count"] == 3
@@ -180,7 +214,7 @@ def test_bad_tool_arguments_rejected_before_read(args, monkeypatch):
 
     monkeypatch.setattr(SpendingTools, "summarize_spending", fail)
     answer = run(ScriptedModel(AIMessage(content="", tool_calls=[call(args=args)])))
-    assert answer.status == "unavailable" and answer.tool_calls == 0
+    assert answer.status == "unavailable" and answer.tool_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -195,7 +229,7 @@ def test_bad_tool_arguments_rejected_before_read(args, monkeypatch):
 def test_whole_batch_validated_before_any_read(bad, monkeypatch):
     monkeypatch.setattr(SpendingTools, "summarize_spending", lambda *_: pytest.fail("must not run"))
     answer = run(ScriptedModel(AIMessage(content="", tool_calls=[call(call_id="good"), bad])))
-    assert answer.status == "unavailable" and answer.tool_calls == 0
+    assert answer.status == "unavailable" and answer.tool_calls == 1
 
 
 def test_duplicate_call_id_rejected_across_turns():
@@ -205,7 +239,7 @@ def test_duplicate_call_id_rejected_across_turns():
             AIMessage(content="", tool_calls=[call()]),
         )
     )
-    assert answer.status == "unavailable" and answer.tool_calls == 1
+    assert answer.status == "unavailable" and answer.tool_calls == 2
 
 
 def test_tool_budget_prevents_oversized_batch():
@@ -213,7 +247,7 @@ def test_tool_budget_prevents_oversized_batch():
         ScriptedModel(AIMessage(content="", tool_calls=[call(), call(call_id="two")])),
         settings=config(llm_max_tool_calls=1),
     )
-    assert answer.status == "limited" and answer.tool_calls == 0
+    assert answer.status == "limited" and answer.tool_calls == 1
 
 
 def test_model_budget_stops_without_additional_call():
@@ -279,7 +313,7 @@ def test_invalid_snapshot_never_calls_model(change):
 
 def test_provider_error_sanitized_and_no_fallback():
     answer = run(ScriptedModel(RuntimeError("secret-token raw prompt filesystem credentials")))
-    assert answer.status == "unavailable" and answer.model_calls == 1
+    assert answer.status == "unavailable" and answer.model_calls == 2
     assert "secret-token" not in answer.model_dump_json()
 
 
@@ -425,7 +459,11 @@ def test_actual_langchain_fake_model_and_ambient_tracing_disabled(monkeypatch):
 
     class ToolFake(GenericFakeChatModel):
         def bind_tools(self, tools, **kwargs):
-            assert len(tools) == 3
+            names = {tool.name for tool in tools}
+            assert names in (
+                {"task", "write_todos", "request_clarification"},
+                {"summarize_spending", "get_transactions", "find_recurring_charges"},
+            )
             return self
 
         async def ainvoke(self, *args, **kwargs):
@@ -437,7 +475,21 @@ def test_actual_langchain_fake_model_and_ambient_tracing_disabled(monkeypatch):
     model = ToolFake(
         messages=iter(
             [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        call(
+                            "task",
+                            {
+                                "subagent_type": "spending",
+                                "description": "Summarize observed spending",
+                            },
+                            "delegation",
+                        )
+                    ],
+                ),
                 AIMessage(content="", tool_calls=[call()]),
+                AIMessage(content="Observed $16."),
                 AIMessage(content="Observed $16."),
             ]
         )
@@ -482,7 +534,7 @@ def test_invalid_serialized_tool_call_not_accepted():
             )
         )
     )
-    assert answer.status == "unavailable" and answer.tool_calls == 0
+    assert answer.status == "unavailable" and answer.tool_calls == 1
 
 
 def test_oversized_model_text_not_accepted():
@@ -507,7 +559,7 @@ def test_transaction_limit_is_strict(limit):
             )
         )
     )
-    assert answer.status == "unavailable" and answer.tool_calls == 0
+    assert answer.status == "unavailable" and answer.tool_calls == 1
 
 
 def test_recurring_is_only_a_candidate_with_evidence():
@@ -561,208 +613,217 @@ def test_smoke_diagnostic_uses_status_without_error_text(status, category):
     assert "private" not in json.dumps(diagnostic.failure)
 
 
-def test_smoke_diagnostic_never_makes_more_than_two_requests():
+def test_smoke_diagnostic_never_makes_more_than_four_shared_requests():
     from scripts.smoke_ai import DiagnosticModel
 
-    provider = ScriptedModel(AIMessage(content="first"), AIMessage(content="second"))
+    provider = ScriptedModel(*(AIMessage(content="reply") for _ in range(4)))
     diagnostic = DiagnosticModel(provider)
-    asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
-    asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
+    views = [diagnostic.bind_tools([]), diagnostic.bind_tools([])]
+    for index in range(4):
+        asyncio.run(views[index % 2].ainvoke([], config={"callbacks": []}))
     with pytest.raises(RuntimeError, match="limit"):
         asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
-    assert len(provider.messages) == 2
+    assert len(provider.messages) == 4 and diagnostic.calls == 4
     assert diagnostic.failure["category"] == "local_call_limit"
 
 
-@pytest.mark.parametrize("provider", ["gemini", "nemotron"])
-def test_nested_inspection_schema_serializes_for_real_provider_without_network(
-    provider, monkeypatch
-):
-    from langchain_core.messages import HumanMessage
-
-    importlib.import_module(
-        "langchain_google_genai" if provider == "gemini" else "langchain_nvidia_ai_endpoints"
-    )
-
-    class Catalog:
-        def search(self, *_args, **_kwargs):
-            pytest.fail("Schema binding must not read catalog data")
-
-    class Inspector:
-        async def inspect_floor_plan(self, *_args, **_kwargs):
-            pytest.fail("Schema binding must not inspect a model")
-
-    monkeypatch.setattr(socket.socket, "connect", lambda *_: pytest.fail("unexpected network"))
-    monkeypatch.setattr(socket, "create_connection", lambda *_: pytest.fail("unexpected network"))
-    model = create_provider_model(config(llm_provider=provider))
-    binding = model.bind_tools(_read_tools(SpendingTools(snapshot()), Catalog(), Inspector()))
-    # bind_tools uses an intermediate schema. Also exercise the final request
-    # conversion, which differs between Google GenAI and NVIDIA integrations.
-    messages = [HumanMessage(content="Inspect a selected synthetic floor plan")]
-    if provider == "gemini":
-        request = model._prepare_request(messages, **binding.kwargs)
-        declarations = [
-            declaration.model_dump(mode="json", exclude_none=True)
-            for tool in request["config"].tools
-            for declaration in tool.function_declarations
-        ]
-        function = next(item for item in declarations if item["name"] == "inspect_floor_plan")
-    else:
-        _, payload, _ = model._prepare_inputs_and_payload(messages, **binding.kwargs)
-        function = next(
-            item["function"]
-            for item in payload["tools"]
-            if item["function"]["name"] == "inspect_floor_plan"
-        )
-    parameters = function["parameters"]
-    assert set(parameters["required"]) == {"criteria", "property_id", "floor_plan_id"}
-    assert set(parameters["properties"]) == {
-        "criteria",
-        "property_id",
-        "floor_plan_id",
-        "include_dimensions",
-    }
-    criteria = parameters["properties"]["criteria"]
-    assert criteria["type"].lower() == "object"
-    assert criteria["properties"]["state"]["enum"] == ["TX", "CA"]
-    assert "max_monthly_rent_usd" in criteria["properties"]
-    assert "model_id" not in criteria["properties"] and "endpoint" not in criteria["properties"]
-    serialized = json.dumps(parameters)
-    assert '"$ref"' not in serialized and '"$defs"' not in serialized
-    assert "synthetic-gemini-token" not in serialized and "synthetic-nvidia-token" not in serialized
-
-
-@pytest.mark.parametrize(
-    "override",
-    [
-        {"property_id": True},
-        {"property_id": "20"},
-        {"floor_plan_id": 0},
-        {"include_dimensions": "true"},
-        {"model_id": "arbitrary"},
-        {"criteria": {"model_id": "arbitrary"}},
-        {"criteria": {"limit": 21}},
-        {"criteria": {"endpoint": "https://unrelated.invalid"}},
-    ],
-)
-def test_inspection_nested_arguments_rejected_before_any_inspector_read(override):
-    class Catalog:
-        def search(self, *_args, **_kwargs):
-            pytest.fail("Invalid tool input must not read the catalog")
-
-    class Inspector:
-        async def inspect_floor_plan(self, *_args, **_kwargs):
-            pytest.fail("Invalid tool input must not invoke the inspector")
-
-    arguments = {"criteria": {}, "property_id": 20, "floor_plan_id": 30, **override}
-    response = run(
-        ScriptedModel(AIMessage(content="", tool_calls=[call("inspect_floor_plan", arguments)])),
-        catalog=Catalog(),
-        matterport_client=Inspector(),
-    )
-    assert response.status == "unavailable" and response.tool_calls == 0
-
-
-def test_inspection_passes_validated_nested_criteria_and_explicit_dimensions_flag():
-    from spending_api.costar import CostarSearchCriteria
-
-    class Catalog:
-        def search(self, *_args, **_kwargs):
-            pytest.fail("The wrapper delegates catalog validation to the inspector")
-
-    class Inspector:
-        async def inspect_floor_plan(
-            self, criteria, property_id, floor_plan_id, *, include_dimensions
-        ):
-            assert isinstance(criteria, CostarSearchCriteria)
-            assert criteria.state == "CA" and criteria.limit == 2
-            assert (property_id, floor_plan_id) == (20, 30)
-            assert include_dimensions is False
-            return {
-                "status": "ok",
-                "source_kind": "synthetic_inspector",
-                "geometry_clearance_verified": False,
-                "rooms": [],
-            }
-
-    arguments = {
-        "criteria": {"state": "CA", "limit": 2},
-        "property_id": 20,
-        "floor_plan_id": 30,
-        "include_dimensions": False,
-    }
-    response = run(
-        ScriptedModel(
-            AIMessage(content="", tool_calls=[call("inspect_floor_plan", arguments)]),
-            AIMessage(content="No dimensions requested; furniture clearance is unknown."),
-        ),
-        catalog=Catalog(),
-        matterport_client=Inspector(),
-    )
-    assert response.status == "answered" and response.tool_calls == 1
-    assert response.evidence[0]["arguments"] == arguments
-    assert response.evidence[0]["result"]["geometry_clearance_verified"] is False
-
-
-def test_inspection_tool_not_exposed_without_both_catalog_and_inspector():
-    def names(tools):
-        return {tool.name for tool in tools}
-
-    assert "inspect_floor_plan" not in names(_read_tools(SpendingTools(snapshot()), None, object()))
-    assert "inspect_floor_plan" not in names(_read_tools(SpendingTools(snapshot()), object(), None))
-
-
-@pytest.mark.parametrize(
-    "room_details_truncated,reference_count", [(True, 3), (True, 1), (False, 3), (False, 1)]
-)
-def test_inspection_coverage_limitations_reach_agent_caveats(
-    room_details_truncated, reference_count
-):
-    class Catalog:
-        def search(self, *_args, **_kwargs):
-            pytest.fail("This wrapper delegates catalog selection to the inspector")
-
-    evidence = {
-        "status": "ok",
-        "source_kind": "synthetic_inspector",
-        "room_count": 25 if room_details_truncated else 5,
-        "rooms_returned": 20 if room_details_truncated else 5,
-        "rooms_truncated": room_details_truncated,
-        "verified_reference_count": reference_count,
-        "models_inspected": 1,
-        "all_referenced_models_inspected": reference_count == 1,
-        "geometry_clearance_verified": False,
-    }
-
-    class Inspector:
-        async def inspect_floor_plan(self, *_args, **_kwargs):
-            return copy.deepcopy(evidence)
-
-    response = run(
-        ScriptedModel(
+def test_planning_is_activity_and_cannot_supply_evidence():
+    model = ScriptedModel(
+        advisor_responses=[
             AIMessage(
                 content="",
                 tool_calls=[
                     call(
-                        "inspect_floor_plan",
+                        "write_todos",
                         {
-                            "criteria": {},
-                            "property_id": 20,
-                            "floor_plan_id": 30,
+                            "todos": [
+                                {"content": "Inspect observed spending", "status": "in_progress"},
+                            ]
                         },
                     )
                 ],
             ),
-            AIMessage(content="The selected model has room metadata; clearance remains unknown."),
-        ),
-        catalog=Catalog(),
-        matterport_client=Inspector(),
+            AIMessage(content="You spent $999."),
+        ]
     )
-    assert response.status == "answered"
-    assert response.evidence[0]["result"] == evidence
-    assert any("bounded subset" in caveat for caveat in response.caveats) is room_details_truncated
-    fraction = (
-        "inspect_floor_plan inspected 1 of 3 catalog model references; "
-        "other models remain uninspected."
+    answer = run(model)
+    assert answer.status == "unavailable" and answer.evidence == []
+    assert answer.tool_calls == 1 and answer.activity[0]["tool"] == "write_todos"
+    assert "$999" not in answer.answer
+
+
+def test_explicit_clarification_returns_only_missing_inputs():
+    model = ScriptedModel(
+        advisor_responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    call(
+                        "request_clarification",
+                        {
+                            "question": "You spent $999. Which dates?",
+                            "needed_inputs": ["date_range", "location"],
+                        },
+                    )
+                ],
+            )
+        ]
     )
-    assert (fraction in response.caveats) is (reference_count == 3)
+    answer = run(model)
+    assert answer.status == "clarification"
+    assert answer.needed_inputs == ["date_range", "location"]
+    assert answer.answer == "Please provide: date range, location."
+    assert answer.evidence == [] and answer.model_calls == 1
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"subagent_type": "general-purpose", "description": "Read local files"},
+        {"subagent_type": "spending", "description": "Read", "path": ".env"},
+        {"subagent_type": "spending", "description": "x" * 2001},
+    ],
+)
+def test_whole_delegation_batch_validated_before_any_child(arguments):
+    model = ScriptedModel(
+        advisor_responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    call(
+                        "task", {"subagent_type": "spending", "description": "Read totals"}, "valid"
+                    ),
+                    call("task", arguments, "invalid"),
+                ],
+            )
+        ]
+    )
+    answer = run(model)
+    assert answer.status == "unavailable" and answer.tool_calls == 0
+    assert model.messages == [] and answer.evidence == []
+
+
+def test_custom_date_validator_checks_entire_batch_before_valid_read(monkeypatch):
+    monkeypatch.setattr(
+        SpendingTools, "summarize_spending", lambda *_: pytest.fail("must not read")
+    )
+    answer = run(
+        ScriptedModel(
+            AIMessage(
+                content="",
+                tool_calls=[
+                    call(call_id="valid"),
+                    call(args={"start": "2026-12-01", "end": "2026-11-01"}, call_id="invalid"),
+                ],
+            )
+        )
+    )
+    assert answer.status == "unavailable" and answer.evidence == []
+    assert answer.tool_calls == 1
+
+
+def test_global_output_reservation_stops_child_before_next_model_call():
+    answer = run(
+        ScriptedModel(AIMessage(content="", tool_calls=[call()]), AIMessage(content="unused")),
+        settings=config(llm_max_total_output_tokens=2048),
+    )
+    assert answer.status == "limited"
+    assert (answer.model_calls, answer.tool_calls, answer.output_tokens_reserved) == (2, 2, 2048)
+
+
+def test_reported_tokens_are_distinct_from_reserved_ceiling():
+    answer = run(
+        ScriptedModel(
+            AIMessage(
+                content="",
+                tool_calls=[call()],
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                },
+            ),
+            AIMessage(content="Observed $16."),
+        )
+    )
+    assert answer.status == "answered"
+    assert answer.output_tokens_reserved == 4096 and answer.output_tokens_reported == 20
+    assert answer.evidence[0]["delegation_id"] == "delegate-1"
+    assert answer.evidence[0]["role"] == "spending"
+    assert answer.evidence[0]["source_hash"] == answer.source_hash
+
+
+@pytest.mark.parametrize("bad_child", ["tool_budget", "invalid_tool", "no_evidence"])
+def test_parallel_children_share_budget_and_cannot_borrow_sibling_evidence(bad_child):
+    class ParallelModel:
+        def __init__(self):
+            self.good_done = asyncio.Event()
+
+        def bind_tools(self, tools):
+            advisor = "task" in {tool.name for tool in tools}
+            owner = self
+
+            class Bound:
+                async def ainvoke(self, messages, config=None):
+                    if advisor:
+                        if any(isinstance(message, ToolMessage) for message in messages):
+                            return AIMessage(content="Both children succeeded.")
+                        return AIMessage(
+                            content="",
+                            tool_calls=[
+                                call(
+                                    "task",
+                                    {"subagent_type": "spending", "description": "good"},
+                                    "good-task",
+                                ),
+                                call(
+                                    "task",
+                                    {"subagent_type": "spending", "description": "bad"},
+                                    "bad-task",
+                                ),
+                            ],
+                        )
+                    question = next(
+                        message.content for message in messages if message.type == "human"
+                    )
+                    if question == "good":
+                        if any(isinstance(message, ToolMessage) for message in messages):
+                            owner.good_done.set()
+                            return AIMessage(content="Observed $16.")
+                        return AIMessage(content="", tool_calls=[call(call_id="good-read")])
+                    await owner.good_done.wait()
+                    if bad_child == "no_evidence":
+                        return AIMessage(content="Invented answer with no data read.")
+                    return AIMessage(
+                        content="",
+                        tool_calls=[
+                            call(
+                                "delete_transactions"
+                                if bad_child == "invalid_tool"
+                                else "summarize_spending",
+                                call_id="bad-read",
+                            )
+                        ],
+                    )
+
+            return Bound()
+
+    answer = run(ParallelModel(), settings=config(llm_max_tool_calls=3))
+    assert answer.status == ("limited" if bad_child == "tool_budget" else "unavailable")
+    assert answer.tool_calls == 3 and len(answer.evidence) == 1
+    assert answer.evidence[0]["delegation_id"] == "good-task"
+    assert any(
+        row["call_id"] == "bad-task" and row["status"] == "failed" for row in answer.activity
+    )
+    assert "succeeded" not in answer.answer
+
+
+def test_spending_child_cannot_access_catalog_tool():
+    class Catalog:
+        def search(self, *_):
+            pytest.fail("Spending role must not read rental catalog")
+
+    model = ScriptedModel(AIMessage(content="", tool_calls=[call("costar_search")]))
+    model.role = "spending"
+    answer = run(model, catalog=Catalog())
+    assert answer.status == "unavailable" and answer.evidence == []

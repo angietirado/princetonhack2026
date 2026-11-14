@@ -1,10 +1,10 @@
 # Spending Companion design and decisions
 
-Status: connected dashboard and spending tools; AI orchestration planned. Updated November 14, 2026.
+Status: connected dashboard, LangChain/Deep Agents orchestration, and opt-in Photon quick controls. Updated November 14, 2026.
 
 Current MVP scope: visualize and analyze one pinned Nessie customer through the Ledgerly dashboard and terminal.
 Public options live in `settings.toml`; credentials stay in `.env`. Photon is explicitly
-disabled until the MVP is complete. The phone architecture below remains the later milestone.
+disabled until channel credentials and enrolled IDs are configured. Live phone delivery remains unverified.
 
 Build a phone-first spending companion: a user texts a question, agents inspect that user's Nessie v2 transactions, and Photon 2.0 carries a concise, evidence-backed answer back to their phone. A small web app shows the same spending information. The hackathon demo should make a spending change understandable and suggest an action the user can choose to take.
 
@@ -22,11 +22,11 @@ The first demo uses synthetic customers and transactions. Success means one enro
 | Banking data | Capital One Nessie v2 through a backend-only adapter | Connected; one generated customer pinned in settings |
 | Project split | Application under `apps/`; independent package under `data-generator/` | Set up |
 | Frontend | Serve the root Ledgerly dashboard; retain the React, TypeScript, and Vite scaffold | Connected charts, balances, filtered transactions, and CSV reports |
-| Agents | Provider-neutral tools with deterministic calculations; choose model runtime later | Tools ready; orchestration planned |
-| Phone channel | Photon 2.0 Beta, with SMS as the intended demo channel | Boundary ready; provisioning and worker planned |
+| Agents | LangChain advisor, Deep Agents specialists, deterministic tools | Implemented; bounded shared budget |
+| Phone channel | Photon 2.0 Beta, with SMS as the intended demo channel | Receiver and one-job worker implemented; live delivery pending |
 | Local development | Fixture mode by default; no external service needed | Working |
 | Containers | Docker Compose runs FastAPI, Ledgerly behind nginx, and a separate generator | Set up |
-| Message persistence | SQLite durable inbox for the single-process demo | Receiver ready; consumer planned |
+| Message persistence | SQLite durable inbox for the single-process demo | Durable inbox, prepared reply, lease and bounded retries |
 | Deployment | Local development first; choose hosting when the phone flow is ready | Open |
 
 Nessie v2 uses `https://v2-prod-api.nessieisreal.com`, bearer authentication, integer-cent money fields, and cursor pagination. The adapter follows its [official OpenAPI specification](https://v2.nessieisreal.com/openapi.yaml). Photon 2.0 uses the `https://api.photon.codes/v1` API and its Beta documentation. [Photon version guide](https://photon.codes/docs/llms.txt)
@@ -38,9 +38,12 @@ flowchart LR
     Phone[User phone] <--> Photon[Photon 2.0]
     Photon --> Receiver[FastAPI verified webhook]
     Receiver --> Inbox[(SQLite inbox)]
-    Inbox -. planned .-> Worker[Agent worker]
-    Worker -. reply transport .-> Photon
-    Worker -. calls .-> Tools[Scoped spending tools]
+    Inbox --> Worker[Explicit quick-control worker]
+    Worker -->|explicit send| Photon
+    Worker --> Tools[Scoped spending tools]
+    API --> Advisor[LangChain advisor]
+    Advisor --> Specialists[Deep Agents specialists]
+    Specialists --> Tools
     Ledgerly[Ledgerly dashboard] --> API[FastAPI read endpoints]
     React[React source scaffold] --> API
     API --> Tools
@@ -89,7 +92,7 @@ Start with one coordinator and one bounded tool loop. “Analyst” and “reply
 
 Bind `SpendingTools` to an authorized snapshot before exposing methods to a model. Customer and account scope must come from server context, never from an LLM-provided user ID. The runtime must validate tool arguments, cap execution time and tool rounds, and treat merchant descriptions and message text as data rather than instructions. The application exposes no banking write tool.
 
-Keep arithmetic in Python. Model text should quote tool results and identify the date range. If data or a tool fails, say that the analysis is unavailable instead of inventing a total. There is no LLM dependency or model selected in the scaffold yet.
+Keep arithmetic in Python. Model text should quote tool results and identify the date range. If data or a tool fails, say that the analysis is unavailable instead of inventing a total. Gemini and NVIDIA Nemotron share the same bounded multi-agent interface. Model interpretation remains separate from deterministic evidence.
 
 ## Money and data semantics
 
@@ -117,13 +120,12 @@ The app reads customer accounts, merchants, and the tenant transaction list, the
 | `GET /api/v1/agent/status` | Optional assistant availability and selected provider |
 | `POST /api/v1/agent/answer` | Bounded LangChain question with read-only tools and evidence |
 | `POST /api/v1/costar/search` | Filter the supplied local apartment catalog with explicit coverage limits |
-| `POST /api/v1/costar/inspect` | Inspect one unambiguous catalog-bound Matterport reference |
 | `POST /webhooks/photon` | Signed provider events; durable receipt only |
 | `GET /docs` and `GET /openapi.json` | Executable API contract |
 
 The served Ledgerly dashboard shows current cash and card balances, gross expenses by category, refunds, monthly net spending, and searchable transactions. Date filters apply to activity and reports, while balances remain current. CSV exports include all filtered rows across table pages. Recurring charges are labeled candidates. The opt-in question view separates AI interpretation from exact tool evidence and clears pending/stored page results on lock or refresh. Source labels distinguish Nessie from local synthetic fixtures. The retained React starter is not the Docker default. [Frontend handoff](../apps/frontend/README.md)
 
-The optional apartment workflow combines a local CoStar search with one catalog-bound Matterport read. It preserves recorded rent ranges, model-reference scope, modern versus legacy measurement sources, and returned units. Historical availability is not a live quote; scan area is not proof of furniture clearance. Gemini and NVIDIA Nemotron share a sequential LangChain tool loop with bounded turns, calls, output, and duration. Question requests are independent; the Photon worker and persistent conversation context remain deferred.
+The optional apartment workflow searches a bounded local CoStar catalog and preserves recorded rent ranges, source hashes, and historical availability caveats. Its direct endpoint is independent of the model. Spatial integrations are archived on `archive/spatial-prototype-20261114`; the active app has no inspection route or vendor credentials.
 
 ## Data generator
 
@@ -144,14 +146,15 @@ The generator owns sandbox creation. The application owns read-only analysis. Th
 | 3 — Phone loop | Provision SMS, connect receiver, implement persistent worker/outbox | A phone question receives one reply; duplicate delivery and restart do not send twice |
 | 4 — Demo polish | Frontend teammate's UI; follow-up context; a short demo script | Phone and web show matching totals for the same customer and dates |
 
-The offline automated checks cover exact money arithmetic, exclusions/refunds, customer scope, monthly candidates, dashboard totals, filtering, pagination, CSV safety, stale-request handling, and API authorization/date validation, plus the deferred webhook boundary. Desktop and mobile browser checks exercise the served dashboard with synthetic fixtures. These checks do not load private credentials.
+The offline automated checks cover exact money arithmetic, exclusions/refunds, customer scope, monthly candidates, dashboard totals, filtering, pagination, CSV safety, stale-request handling, and API authorization/date validation, plus the signed webhook and offline worker boundaries. DOM regressions exercise the served dashboard behavior; a new rendered desktop/mobile review is still pending. These checks do not load private credentials.
 
 ## Next decisions and backlog
 
 - [x] Add Gemini and NVIDIA Nemotron through LangChain with per-question turn, tool, time, and output limits.
 - [ ] Choose the demo persona and final app name.
 - [ ] Confirm a provisioned Photon **SMS** number. Shared iMessage service is a separate channel and must be presented as such if used for a fallback demo.
-- [ ] Add the inbox worker, persisted reply/outbox, retry/backoff, and delivery-status handling.
+- [x] Add an explicit one-job inbox worker, persisted reply, leases, and bounded retries.
+- [ ] Verify real Photon delivery and add delivery-status reconciliation.
 - [ ] Add one conversation of bounded history per enrolled sender, plus opt-out handling before proactive messages.
 - [ ] Replace the shared demo bearer token and single-customer settings with real user authentication and verified phone-to-customer enrollment before opening access.
 - [ ] Add user timezone handling, caching, and provider rate-limit backoff. The dashboard already displays retrieval time.
@@ -174,3 +177,8 @@ Stretch ideas: weekly spending digests, category budgets, richer recurring-charg
 | 2026-11-14 | Connect Ledgerly visualizations to one protected FastAPI dashboard response; keep Photon disabled | Present consistent customer-scoped figures, date filters, and exports without fabricated sample totals |
 | 2026-11-14 | Add opt-in LangChain providers, local CoStar search, and catalog-bound Matterport inspection | Connect questions to scoped evidence while keeping missing measurements and historical availability explicit |
 | 2026-11-14 | Connect Ask your books to the question API with separate evidence and incomplete-answer states | Make the implemented tool workflow usable without fabricating conversation history or hiding partial results |
+
+
+## MVP direction, November 14
+
+The advisor delegates to deterministic domain tools through LangChain and Deep Agents. Keep factual evidence separate from model prose, agent activity, and clarification requests. The implementation path is spending comparisons and evidence-backed dashboard findings, bounded conversational context, local business-location profiles, explicit financial scenarios, then a representative evaluation set measuring arithmetic, provenance, missing-input handling, latency, and quota use. Market profiles must describe supplied records and geographic assumptions rather than infer unsupported audience characteristics. Scenario arithmetic must retain input assumptions and avoid treating break-even thresholds as forecasts.

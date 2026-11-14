@@ -24,16 +24,10 @@
   let askTimer = null;
   let dashboardLoading = false;
   let answerContext = 0;
-  let inspectionSequence = 0;
-  let inspectionController = null;
-  let inspectionTimer = null;
-  let inspectionPending = false;
-  let inspectionReturnFocus = null;
   let catalogSequence = 0;
   let catalogController = null;
   let catalogTimer = null;
   let catalogPending = false;
-  let catalogModelDefaultSet = false;
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -48,7 +42,10 @@
     toastTimer = setTimeout(() => $("toast").classList.remove("show"), 2400);
   }
   function showView(view) {
+    const destination = $(view + "-view");
+    if (!destination?.classList.contains("page")) return;
     document.querySelectorAll(".page").forEach((item) => item.classList.toggle("hidden", item.id !== view + "-view"));
+    document.querySelector(".range-toolbar").classList.toggle("hidden", view === "ask" || view === "settings");
     document.querySelectorAll(".nav-item").forEach((item) => {
       const active = item.dataset.view === view;
       item.classList.toggle("active", active);
@@ -57,7 +54,12 @@
     });
     const active = document.querySelector('.nav-item[data-view="' + view + '"]');
     $("page-title").textContent = active ? active.getAttribute("aria-label") : "Overview";
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    const heading = destination.querySelector("h1");
+    if (heading && data && !dashboardLoading && !$("dashboard-data").classList.contains("hidden")) {
+      heading.setAttribute("tabindex", "-1");
+      heading.focus({ preventScroll: true });
+    }
+    window.scrollTo({ top: 0, behavior: "auto" });
     if (view === "ask") void loadAskStatus();
   }
   document.querySelectorAll("[data-view], [data-view-link]").forEach((button) => {
@@ -169,33 +171,36 @@
 
   function clearAskAnswer() {
     answerContext += 1;
-    clearInspection();
     clearCatalog();
     $("ask-result").classList.add("hidden");
-    for (const id of ["ask-outcome", "ask-asked-question", "ask-answer", "ask-usage", "ask-source"]) $(id).textContent = "";
+    for (const id of ["ask-outcome", "ask-asked-question", "ask-answer", "ask-usage", "ask-source", "ask-revision"]) $(id).textContent = "";
+    $("ask-clarification").classList.add("hidden");
+    $("ask-question").setAttribute("aria-describedby", "ask-guidance ask-counter");
+    $("ask-technical-details").open = false;
     $("ask-caveats").replaceChildren();
     $("ask-evidence").replaceChildren();
+    $("ask-activity").replaceChildren();
+    $("ask-needed-inputs").replaceChildren();
   }
   function updateAskControls() {
-    const idle = Boolean(data && !dashboardLoading && !askStatusLoading && !askPending && !inspectionPending && !catalogPending);
+    const idle = Boolean(data && !dashboardLoading && !askStatusLoading && !askPending && !catalogPending);
     const ready = idle && askStatus?.enabled;
     $("ask-question").disabled = !ready;
     $("ask-submit").disabled = !ready || !$("ask-question").value.trim();
     $("ask-submit").textContent = askPending ? "Working…" : "Ask →";
+    $("ask-cancel").classList.toggle("hidden", !askPending);
+    $("ask-cancel").disabled = !askPending;
+    $("ask-edit-question").disabled = !ready;
     $("ask-check").disabled = !idle;
     $("ask-example-spending").disabled = !ready;
     $("ask-example-housing").disabled = !ready;
     $("ask-example-housing").classList.toggle("hidden", askStatus?.costar_enabled !== true);
     $("ask-counter").textContent = $("ask-question").value.length + " / 2000 characters";
     $("ask-form").setAttribute("aria-busy", String(askPending));
-    document.querySelectorAll(".inspect-floor-plan").forEach((button) => {
-      button.disabled = !idle || askStatus?.matterport_enabled !== true;
-      button.classList.toggle("hidden", askStatus?.matterport_enabled !== true);
-    });
-    $("inspection-cancel").classList.toggle("hidden", !inspectionPending);
-    $("inspection-result").setAttribute("aria-busy", String(inspectionPending));
-    const catalogReady = idle && askStatus?.costar_enabled === true;
-    for (const id of ["catalog-state", "catalog-city", "catalog-bedrooms", "catalog-rent", "catalog-area", "catalog-model", "catalog-submit"]) $(id).disabled = !catalogReady;
+    const catalogEnabled = askStatus?.costar_enabled === true;
+    const catalogReady = idle && catalogEnabled;
+    $("catalog-controls").classList.toggle("hidden", !catalogEnabled);
+    for (const id of ["catalog-state", "catalog-city", "catalog-bedrooms", "catalog-rent", "catalog-area", "catalog-submit"]) $(id).disabled = !catalogReady;
     $("catalog-submit").textContent = catalogPending ? "Searching…" : "Search catalog";
     $("catalog-cancel").classList.toggle("hidden", !catalogPending);
     $("catalog-form").setAttribute("aria-busy", String(catalogPending));
@@ -209,7 +214,6 @@
     askStatus = null;
     askStatusLoading = false;
     askPending = false;
-    catalogModelDefaultSet = false;
     $("catalog-form").reset();
     $("ask-question").value = "";
     $("ask-provider").textContent = "Check availability to start.";
@@ -236,7 +240,7 @@
     }, milliseconds);
   }
   async function loadAskStatus(force = false) {
-    if (!data || dashboardLoading || askPending || inspectionPending || catalogPending || askStatusLoading || (askStatus && !force)) return;
+    if (!data || dashboardLoading || askPending || catalogPending || askStatusLoading || (askStatus && !force)) return;
     const requestId = ++askSequence;
     askController?.abort();
     askController = new AbortController();
@@ -255,8 +259,7 @@
       if (requestId !== askSequence) return;
       if (!status || typeof status.enabled !== "boolean" || typeof status.provider !== "string" || typeof status.model !== "string" || status.provider.length > 160 || status.model.length > 160) throw new Error("invalid status");
       askStatus = status;
-      if (!catalogModelDefaultSet) { $("catalog-model").checked = status.matterport_enabled === true; catalogModelDefaultSet = true; }
-      $("ask-provider").textContent = status.enabled ? label(status.provider) + " · " + status.model + " · Read-only tools" : "AI is disabled for this workspace. Your spending dashboard remains available.";
+      $("ask-provider").textContent = status.enabled ? "AI questions are enabled · Read-only tools" : "AI is disabled for this workspace. Your spending dashboard remains available.";
     } catch (error) {
       if (requestId !== askSequence || error.name === "AbortError") return;
       $("ask-provider").textContent = "AI availability could not be checked.";
@@ -267,8 +270,16 @@
   }
   $("ask-check").addEventListener("click", () => void loadAskStatus(true));
   $("ask-question").addEventListener("input", () => { $("ask-error").textContent = ""; updateAskControls(); });
+  $("ask-edit-question").addEventListener("click", () => {
+    if ($("ask-edit-question").disabled || $("ask-result").classList.contains("hidden")) return;
+    $("ask-question").value = $("ask-asked-question").textContent;
+    $("ask-error").textContent = "";
+    $("ask-state").textContent = "Add the requested details to your original question, then submit it. Each question starts fresh.";
+    updateAskControls();
+    $("ask-question").focus();
+  });
   $("ask-example-spending").addEventListener("click", () => {
-    if (!askStatus?.enabled || askPending || inspectionPending || catalogPending) return;
+    if (!askStatus?.enabled || askPending || catalogPending) return;
     const start = data?.summary.start || "[start date]";
     const end = data?.summary.end || "[end date]";
     $("ask-question").value = "Summarize my observed spending from " + start + " through " + end + " in UTC. Include refunds, exclusions, and missing-history caveats.";
@@ -276,20 +287,19 @@
     $("ask-question").focus();
   });
   $("ask-example-housing").addEventListener("click", () => {
-    if (!askStatus?.enabled || !askStatus.costar_enabled || askPending || inspectionPending || catalogPending) return;
-    $("ask-question").value = "Find up to 3 one-bedroom apartments in TX under $1,800 monthly asking rent. Show each full rent range and recorded availability limitations." + (askStatus.matterport_enabled ? " Return only plans with verified floor-plan model references. Do not inspect yet; I will choose a floor plan." : "");
+    if (!askStatus?.enabled || !askStatus.costar_enabled || askPending || catalogPending) return;
+    $("ask-question").value = "Find up to 3 one-bedroom apartments in TX under $1,800 monthly asking rent. Show each full rent range and recorded availability limitations.";
     updateAskControls();
     $("ask-question").focus();
   });
   const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-  const positiveId = (value) => Number.isSafeInteger(value) && value > 0;
   function canonicalCriteria(criteria) {
-    const fields = ["state", "city", "bedrooms", "max_monthly_rent_usd", "min_square_feet", "limit", "require_floor_plan_model", "include_specialized_housing"];
+    const fields = ["state", "city", "bedrooms", "max_monthly_rent_usd", "min_square_feet", "limit", "include_specialized_housing"];
     if (!object(criteria) || Object.keys(criteria).length !== fields.length || !fields.every((key) => Object.hasOwn(criteria, key))) return false;
     return ["TX", "CA"].includes(criteria.state) &&
       (criteria.city === null || (typeof criteria.city === "string" && criteria.city.length > 0 && criteria.city.length <= 80 && criteria.city === criteria.city.trim() && !/[\u0000-\u001f]/.test(criteria.city))) &&
       [["bedrooms", 0, 6], ["max_monthly_rent_usd", 1, 100000], ["min_square_feet", 0, 10000], ["limit", 1, 20]].every(([key, low, high]) => Number.isSafeInteger(criteria[key]) && criteria[key] >= low && criteria[key] <= high) &&
-      typeof criteria.require_floor_plan_model === "boolean" && typeof criteria.include_specialized_housing === "boolean";
+      typeof criteria.include_specialized_housing === "boolean";
   }
   function clearCatalog() {
     catalogSequence += 1;
@@ -311,7 +321,7 @@
       state: $("catalog-state").value, city: $("catalog-city").value.trim() || null,
       bedrooms: integer("catalog-bedrooms"), max_monthly_rent_usd: integer("catalog-rent"),
       min_square_feet: integer("catalog-area", true), limit: 3,
-      require_floor_plan_model: $("catalog-model").checked, include_specialized_housing: false,
+      include_specialized_housing: false,
     };
   }
   function sameCatalogCriteria(actual, expected) {
@@ -328,6 +338,19 @@
     if (context === answerContext && data && !dashboardLoading && !$("ask-view").classList.contains("hidden") &&
         !$("dashboard-data").classList.contains("hidden") && target?.isConnected && !target.disabled && !target.closest(".hidden")) target.focus();
   }
+  $("ask-cancel").addEventListener("click", () => {
+    if (!askPending) return;
+    const context = answerContext;
+    askSequence += 1;
+    askController?.abort();
+    clearTimeout(askTimer);
+    askController = null;
+    askPending = false;
+    $("ask-state").textContent = "Stopped waiting for the answer. The server may still finish this request; no result will be accepted and no retry was sent.";
+    $("ask-error").textContent = "";
+    updateAskControls();
+    restoreCancelledFocus($("ask-question"), context);
+  });
   $("catalog-cancel").addEventListener("click", () => {
     if (!catalogPending) return;
     const context = answerContext;
@@ -338,7 +361,7 @@
   });
   $("catalog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!data || dashboardLoading || askStatus?.costar_enabled !== true || askStatusLoading || askPending || inspectionPending || catalogPending) return;
+    if (!data || dashboardLoading || askStatus?.costar_enabled !== true || askStatusLoading || askPending || catalogPending) return;
     const criteria = readCatalogCriteria();
     if (!canonicalCriteria(criteria)) {
       $("catalog-error").textContent = "Use TX or CA, a city of at most 80 characters without control characters, 0–6 bedrooms, a whole-dollar starting rent from 1 to 100,000, and an optional whole-number area from 0 to 10,000 square feet.";
@@ -396,119 +419,23 @@
       }
     }
   });
-  function inspectionSelection(result, row) {
-    const metadata = row.matterport;
-    if (askStatus?.matterport_enabled !== true || result.source_kind !== "costar_local_snapshot" ||
-        !canonicalCriteria(result.criteria) || typeof result.source_hash !== "string" || !/^[a-f0-9]{64}$/.test(result.source_hash) ||
-        !positiveId(row.property_id) || !positiveId(row.floor_plan_id) || !object(metadata) ||
-        metadata.scope !== "floor_plan" || metadata.same_property_catalog_checked !== true ||
-        metadata.shared_across_properties !== false || metadata.shared_across_floor_plans !== false ||
-        !Array.isArray(metadata.model_ids) || !metadata.model_ids.length || metadata.model_ids.length > 20 ||
-        metadata.model_ids.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(id)) ||
-        new Set(metadata.model_ids).size !== metadata.model_ids.length || !positiveId(metadata.model_reference_count) || metadata.model_reference_count < metadata.model_ids.length) return null;
-    return Object.freeze({
-      context: answerContext, sourceHash: result.source_hash,
-      modelIds: Object.freeze([...metadata.model_ids]), referenceCount: metadata.model_reference_count,
-      name: String(row.property_name ?? "Property") + " · " + String(row.floor_plan_name ?? "Floor plan"),
-      request: Object.freeze({ criteria: Object.freeze(JSON.parse(JSON.stringify(result.criteria))), property_id: row.property_id, floor_plan_id: row.floor_plan_id }),
-    });
-  }
-  function clearInspection() {
-    inspectionSequence += 1;
-    inspectionController?.abort();
-    clearTimeout(inspectionTimer);
-    inspectionController = null;
-    inspectionPending = false;
-    inspectionReturnFocus = null;
-    $("inspection-result").classList.add("hidden");
-    for (const id of ["inspection-selection", "inspection-state", "inspection-error", "inspection-source"]) $(id).textContent = "";
-    $("inspection-evidence").replaceChildren();
-  }
-  $("inspection-cancel").addEventListener("click", () => {
-    if (!inspectionPending) return;
-    const returnFocus = inspectionReturnFocus;
-    clearInspection();
-    $("inspection-result").classList.remove("hidden");
-    $("inspection-state").textContent = "Stopped waiting for the inspection. No result was accepted.";
-    updateAskControls();
-    if (returnFocus) restoreCancelledFocus(returnFocus.button, returnFocus.context);
-  });
-  function validInspection(result, selection) {
-    return object(result) && result.status === "ok" && result.source_kind === "matterport_model_api" &&
-      result.property_id === selection.request.property_id && result.floor_plan_id === selection.request.floor_plan_id &&
-      typeof result.model_id === "string" && selection.modelIds.includes(result.model_id) &&
-      result.models_inspected === 1 && result.verified_reference_count === selection.referenceCount &&
-      result.geometry_clearance_verified === false && result.current_unit_availability_verified === false &&
-      Array.isArray(result.rooms) && result.rooms.length <= 20 && result.rooms.every(object) &&
-      Array.isArray(result.limitations) && result.limitations.every((item) => typeof item === "string") &&
-      JSON.stringify(result).length <= 32000;
-  }
-  async function inspectSelection(selection, button) {
-    if (selection.context !== answerContext || !button.isConnected || !data || dashboardLoading || askPending || askStatusLoading || inspectionPending || catalogPending || askStatus?.matterport_enabled !== true) return;
-    clearInspection();
-    const requestId = inspectionSequence;
-    let completionMessage = "";
-    inspectionController = new AbortController();
-    inspectionPending = true;
-    inspectionReturnFocus = { button, context: selection.context };
-    $("inspection-result").classList.remove("hidden");
-    $("inspection-selection").textContent = selection.name + " · Property " + selection.request.property_id + " / Floor plan " + selection.request.floor_plan_id;
-    $("inspection-state").textContent = "Reading the catalog-linked model for this floor plan…";
-    updateAskControls();
-    inspectionTimer = setTimeout(() => {
-      if (requestId !== inspectionSequence || selection.context !== answerContext) return;
-      inspectionSequence += 1;
-      inspectionController?.abort();
-      inspectionPending = false;
-      $("inspection-state").textContent = "";
-      $("inspection-error").textContent = "The inspection timed out. No result was accepted; you may try again.";
-      updateAskControls();
-    }, 35000);
-    try {
-      const response = await fetch("/api/v1/costar/inspect", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify(selection.request), cache: "no-store", redirect: "error", signal: inspectionController.signal });
-      if (requestId !== inspectionSequence || selection.context !== answerContext) return;
-      if (response.status === 401) { lock(); $("access-error").textContent = "Your app token was not accepted. Unlock again to inspect a floor plan."; return; }
-      if (!response.ok) {
-        $("inspection-error").textContent = ({ 403: "The inspection was not authorized.", 422: "This floor plan is no longer eligible for inspection. Request a fresh apartment search.", 429: "Another inspection is running. Wait briefly before trying again.", 503: "Matterport inspection is disabled or unavailable. Check availability before trying again.", 504: "The inspection reached its time limit. No result was accepted." })[response.status] || "The inspection could not be completed. No measurements were accepted.";
-        return;
-      }
-      const result = await response.json();
-      if (requestId !== inspectionSequence || selection.context !== answerContext) return;
-      if (!object(result) || result.catalog_source_hash !== selection.sourceHash) {
-        $("inspection-error").textContent = "The catalog changed or its revision could not be verified. Request a fresh apartment search before inspecting.";
-        return;
-      }
-      if (!validInspection(result, selection)) throw new Error("invalid inspection");
-      $("inspection-source").textContent = "Catalog revision: " + result.catalog_source_hash + " · Model: " + result.model_id;
-      $("inspection-evidence").append(renderToolEvidence({ tool: "inspect_floor_plan", arguments: selection.request, result }, true));
-      completionMessage = "Inspection complete. Review the direct evidence, reported units, and missing measurements below. Furniture fit was not verified.";
-    } catch (error) {
-      if (requestId !== inspectionSequence || selection.context !== answerContext || error.name === "AbortError") return;
-      $("inspection-error").textContent = "A valid inspection response could not be received. No measurements were accepted.";
-    } finally {
-      if (requestId === inspectionSequence && selection.context === answerContext) {
-        clearTimeout(inspectionTimer);
-        inspectionPending = false;
-        $("inspection-state").textContent = completionMessage;
-        updateAskControls();
-      }
-    }
-  }
   function validAskAnswer(value) {
-    return object(value) && ["answered", "limited", "unavailable"].includes(value.status) &&
+    return object(value) && ["answered", "clarification", "limited", "unavailable"].includes(value.status) &&
       typeof value.answer === "string" && value.answer.length <= 8000 &&
       ["provider", "model", "source", "source_hash"].every((key) => typeof value[key] === "string" && value[key].length <= 256) &&
       ["model_calls", "tool_calls"].every((key) => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 32) &&
       Array.isArray(value.caveats) && value.caveats.length <= 64 && value.caveats.every((item) => typeof item === "string" && item.length <= 2000) &&
       Array.isArray(value.evidence) && value.evidence.length <= 12 && value.evidence.every((item) => object(item) && typeof item.tool === "string" && item.tool.length <= 80 && object(item.arguments) && object(item.result)) &&
       (value.status !== "answered" || value.evidence.some((item) => item.result.status === "ok")) &&
+      (value.needed_inputs === undefined || (Array.isArray(value.needed_inputs) && value.needed_inputs.length <= 6 && value.needed_inputs.every((item) => typeof item === "string" && item.length <= 200))) &&
+      (value.status !== "clarification" || value.needed_inputs?.length > 0) &&
+      (value.activity === undefined || (Array.isArray(value.activity) && value.activity.length <= 24 && value.activity.every((item) => object(item) && ["role", "tool", "status"].every((key) => typeof item[key] === "string" && item[key].length <= 160)))) &&
       JSON.stringify(value).length <= 512000;
   }
-  const reported = (value, unit) => typeof value === "number" && Number.isFinite(value) ? value + " " + unit : "unknown";
   function renderToolEvidence(entry, directRequest = false) {
     const result = entry.result;
     const host = node("article", undefined, "ask-evidence-item");
-    const titles = { summarize_spending: "Observed spending", get_transactions: "Transaction records", find_recurring_charges: "Recurring candidates", costar_search: "Apartment matches", inspect_floor_plan: "Room measurements" };
+    const titles = { summarize_spending: "Observed spending", get_transactions: "Transaction records", find_recurring_charges: "Recurring candidates", costar_search: "Apartment matches" };
     host.append(node("h4", Object.hasOwn(titles, entry.tool) ? titles[entry.tool] : label(entry.tool)));
     if (result.status !== "ok") {
       host.append(node("p", "This read did not return usable evidence. No zero total or empty-market conclusion follows."));
@@ -525,7 +452,6 @@
         host.append(node("p", "Applied catalog filters: " + criteria.state + (criteria.city ? ", " + criteria.city : ", any city") +
           "; " + (criteria.bedrooms === 0 ? "studio" : criteria.bedrooms + " bedroom(s)") +
           "; advertised starting rent at most " + budget + " per month, per unit; " + (criteria.min_square_feet ? "at least " + criteria.min_square_feet + " square feet" : "no minimum area") + "; up to " + criteria.limit + " results; " +
-          (criteria.require_floor_plan_model ? "verified floor-plan model references required" : "floor-plan model references optional") + "; " +
           (criteria.include_specialized_housing ? "specialized housing included" : "specialized housing excluded") + (directRequest ? ". These are your submitted filters." : ". Compare these applied filters with your question."), "ask-applied-criteria"));
       } else host.append(node("p", "Applied catalog filters are unavailable or unrecognized. Review the exact evidence before relying on these matches.", "ask-applied-criteria"));
       host.append(node("p", result.results.length + " recorded matches shown. Availability is not live; the local catalog is not the whole market."));
@@ -540,30 +466,7 @@
           listing.append(node("p", dollars(rent.minimum) + " – " + (Number.isSafeInteger(rent.maximum) ? dollars(rent.maximum) : "upper bound unknown") + " per month, per unit."));
           if (row.price_range_within_budget !== true) listing.append(node("p", "The full range is not confirmed within the applied catalog budget."));
         } else listing.append(node("p", "Rent units or range are unavailable; see the exact evidence."));
-        const selection = inspectionSelection(result, row);
-        if (selection) {
-          const inspect = node("button", "Inspect this floor plan", "outline-button inspect-floor-plan");
-          inspect.type = "button";
-          inspect.setAttribute("aria-label", "Inspect " + selection.name + ", property " + row.property_id + ", floor plan " + row.floor_plan_id);
-          inspect.addEventListener("click", () => void inspectSelection(selection, inspect));
-          listing.append(node("p", "Property " + row.property_id + " · Floor plan " + row.floor_plan_id + ". One catalog-linked model will be read."), inspect);
-        }
         host.append(listing);
-      }
-    } else if (entry.tool === "inspect_floor_plan" && Array.isArray(result.rooms)) {
-      host.append(node("p", "Model " + String(result.model_id ?? "unknown") + ". Missing or zero measurements do not establish room size. Furniture fit and clear routes were not verified."));
-      if (result.all_referenced_models_inspected === false && positiveId(result.verified_reference_count)) host.append(node("p", String(result.models_inspected ?? 0) + " of " + result.verified_reference_count + " referenced models inspected; measurements do not cover every referenced model."));
-      if (result.rooms_truncated) host.append(node("p", "Only " + result.rooms_returned + " of " + result.room_count + " rooms are displayed."));
-      if (result.rooms.length > 20) host.append(node("p", "The first 20 returned rooms are summarized below; review the exact evidence for the remaining records."));
-      for (const room of result.rooms.slice(0, 20)) {
-        if (!object(room)) continue;
-        const record = node("div", undefined, "ask-record");
-        record.append(node("strong", String(room.label || room.room_id || "Room")));
-        const estimate = room.dimension_estimates;
-        record.append(node("p", object(estimate) ? "Dimension estimate — area: " + reported(estimate.area_square_meters, "square meters") + "; width: " + reported(estimate.width_meters, "meters") + "; depth: " + reported(estimate.depth_meters, "meters") + "." : "Dimension estimates unavailable."));
-        const legacy = room.legacy_dimensions;
-        if (object(legacy)) record.append(node("p", "Legacy estimate — area: " + reported(legacy.area_floor, String(legacy.area_unit).replaceAll("_", " ")) + "; width: " + reported(legacy.width, String(legacy.length_unit)) + "; depth: " + reported(legacy.depth, String(legacy.length_unit)) + "."));
-        host.append(record);
       }
     }
     if (Array.isArray(result.limitations)) {
@@ -572,17 +475,30 @@
       host.append(list);
     }
     const details = node("details");
-    details.append(node("summary", directRequest ? (entry.tool === "costar_search" ? "Exact catalog request and response" : "Exact inspection request and response") : "Exact tool evidence"), node("pre", JSON.stringify(directRequest ? { request: entry.arguments, response: result } : entry, null, 2)));
+    details.append(node("summary", directRequest ? "Exact catalog request and response" : "Exact tool evidence"), node("pre", JSON.stringify(directRequest ? { request: entry.arguments, response: result } : entry, null, 2)));
     host.append(details);
     return host;
   }
   function renderAskAnswer(result, question) {
-    $("ask-outcome").textContent = { answered: "Answered", limited: "Request limit reached", unavailable: "Answer unavailable" }[result.status];
-    $("ask-answer-title").textContent = result.status === "answered" ? "Answer" : "What was completed";
+    $("ask-outcome").textContent = { answered: "Answered", clarification: "More information needed", limited: "Request limit reached", unavailable: "Answer unavailable" }[result.status];
+    $("ask-answer-title").textContent = { answered: "Answer", clarification: "Clarify your question", limited: "What was completed", unavailable: "Unable to answer" }[result.status];
     $("ask-asked-question").textContent = question;
     $("ask-answer").textContent = result.answer;
-    $("ask-usage").textContent = label(result.provider) + " · " + result.model + " · " + result.model_calls + " model calls · " + result.tool_calls + " tool reads";
-    $("ask-source").textContent = "Spending source: " + result.source + " · Revision: " + result.source_hash;
+    $("ask-usage").textContent = label(result.provider) + " · " + result.model + " · " + result.model_calls + " model calls · " + result.tool_calls + " tool calls";
+    if (Number.isSafeInteger(result.output_tokens_reserved) && result.output_tokens_reserved >= 0) $("ask-usage").textContent += " · " + result.output_tokens_reserved + " output tokens reserved (not billed usage)";
+    for (const item of result.activity || []) $("ask-activity").append(node("li", item.role + " · " + item.tool + " · " + item.status));
+    const inputLabels = {
+      date_range: "Start and end dates (UTC)", location: "City and state", monthly_rent_budget: "Monthly rent budget (USD)",
+      bedrooms: "Number of bedrooms", minimum_square_feet: "Minimum area (square feet)", housing_preferences: "Housing preferences",
+      financial_goal: "Financial goal", comparison_options: "Options to compare", household_size: "Household size",
+      income: "Income and its time period", savings_target: "Savings target and time frame",
+    };
+    for (const item of result.needed_inputs || []) $("ask-needed-inputs").append(node("li", Object.hasOwn(inputLabels, item) ? inputLabels[item] : item));
+    $("ask-clarification").classList.toggle("hidden", result.status !== "clarification");
+    $("ask-question").setAttribute("aria-describedby", "ask-guidance ask-counter" + (result.status === "clarification" ? " ask-needed-inputs" : ""));
+    const sourceName = { fixture: "Synthetic fixture", nessie: "Nessie sandbox" };
+    $("ask-source").textContent = "Spending source: " + (Object.hasOwn(sourceName, result.source) ? sourceName[result.source] : result.source) + ". Each tool record shows the dates and filters used.";
+    $("ask-revision").textContent = "Spending revision: " + result.source_hash;
     for (const caveat of result.caveats) $("ask-caveats").append(node("li", caveat));
     for (const entry of result.evidence) $("ask-evidence").append(renderToolEvidence(entry));
     if (!result.evidence.length) $("ask-evidence").append(node("p", "No tool evidence was returned."));
@@ -590,7 +506,7 @@
   }
   $("ask-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!data || dashboardLoading || !askStatus?.enabled || askStatusLoading || askPending || inspectionPending || catalogPending) return;
+    if (!data || dashboardLoading || !askStatus?.enabled || askStatusLoading || askPending || catalogPending) return;
     const question = $("ask-question").value.trim();
     if (!question || $("ask-question").value.length > 2000) { $("ask-error").textContent = "Enter a question of 1 to 2000 characters."; return; }
     const requestId = ++askSequence;
@@ -615,7 +531,7 @@
       if (requestId !== askSequence) return;
       if (!validAskAnswer(result)) throw new Error("invalid answer");
       renderAskAnswer(result, question);
-      completionMessage = { answered: "Answer ready. Review the answer and supporting evidence below.", limited: "Request limit reached. Review the completed evidence and limits below.", unavailable: "Answer unavailable. Review any returned evidence and limitations below." }[result.status];
+      completionMessage = { answered: "Answer ready. Review the answer and supporting evidence below.", clarification: "More information is needed. Review the requested inputs and submit a complete question.", limited: "Request limit reached. Review the completed evidence and limits below.", unavailable: "Answer unavailable. Review any returned evidence and limitations below." }[result.status];
     } catch (error) {
       if (requestId !== askSequence || error.name === "AbortError") return;
       $("ask-error").textContent = "A valid answer could not be received. Check the connection and try again.";
@@ -754,7 +670,7 @@
     document.querySelectorAll(".tab[data-filter]").forEach((item) => {
       const active = item === tab;
       item.classList.toggle("active", active);
-      item.setAttribute("aria-selected", String(active));
+      item.setAttribute("aria-pressed", String(active));
     });
     renderTransactions();
   }));

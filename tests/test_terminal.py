@@ -21,6 +21,10 @@ def answer(status="answered"):
         "source_hash": "1" * 64,
         "model_calls": 2,
         "tool_calls": 1,
+        "activity": [],
+        "needed_inputs": [],
+        "output_tokens_reserved": 0,
+        "output_tokens_reported": 0,
         "evidence": [
             {
                 "tool": "summarize_spending",

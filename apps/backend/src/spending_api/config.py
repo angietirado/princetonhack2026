@@ -23,6 +23,7 @@ class PublicSettings(BaseModel):
     photon_project_id: str = ""
     photon_agent_user_id: str = ""
     photon_allowed_sender_id: str = ""
+    photon_platform: Literal["sms", "imessage"] = "sms"
     photon_inbox_path: Path = Path(".data/photon-inbox.sqlite3")
     llm_enabled: bool = False
     llm_provider: Literal["gemini", "nemotron"] = "gemini"
@@ -30,15 +31,14 @@ class PublicSettings(BaseModel):
     nemotron_model: str = Field(
         default="nvidia/nemotron-3.5-lightning-30b-a3b", min_length=1, max_length=160
     )
-    llm_max_model_turns: int = Field(default=4, ge=1, le=8)
+    llm_max_model_turns: int = Field(default=6, ge=1, le=8)
     llm_max_tool_calls: int = Field(default=6, ge=1, le=12)
     llm_timeout_seconds: float = Field(default=45, ge=1, le=120)
     llm_max_output_tokens: int = Field(default=1024, ge=128, le=4096)
+    llm_max_total_output_tokens: int = Field(default=6144, ge=128, le=32768)
     costar_enabled: bool = False
     costar_data_dir: Path = Path("costardata")
     costar_snapshot_date: date | None = None
-    matterport_enabled: bool = False
-    matterport_timeout_seconds: float = Field(default=15, ge=1, le=30)
 
 
 class Settings(PublicSettings, BaseSettings):
@@ -52,25 +52,9 @@ class Settings(PublicSettings, BaseSettings):
     photon_webhook_secret: SecretStr = SecretStr("")
     gemini_api_key: SecretStr = SecretStr("")
     nvidia_api_key: SecretStr = SecretStr("")
-    matterport_sdk_key: SecretStr = SecretStr("")
-    matterport_api_key: SecretStr = SecretStr("")
-    matterport_api_token: SecretStr = SecretStr("")
-    vexcel_api_key: SecretStr = SecretStr("")
 
     @model_validator(mode="after")
     def require_live_credentials(self):
-        if self.matterport_enabled and not all(
-            [
-                self.costar_enabled,
-                self.matterport_api_key.get_secret_value(),
-                self.matterport_api_token.get_secret_value(),
-                self.app_api_token.get_secret_value(),
-            ]
-        ):
-            raise ValueError(
-                "Enabled Matterport requires the CoStar catalog, APP_API_TOKEN, "
-                "MATTERPORT_API_KEY and MATTERPORT_API_TOKEN"
-            )
         if self.costar_enabled and not self.app_api_token.get_secret_value():
             raise ValueError("Enabled CoStar catalog requires APP_API_TOKEN in the environment")
         if self.llm_enabled:

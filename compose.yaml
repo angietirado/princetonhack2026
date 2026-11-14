@@ -32,10 +32,6 @@ services:
       PHOTON_WEBHOOK_SECRET: ${PHOTON_WEBHOOK_SECRET:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
-      MATTERPORT_SDK_KEY: ${MATTERPORT_SDK_KEY:-}
-      MATTERPORT_API_KEY: ${MATTERPORT_API_KEY:-}
-      MATTERPORT_API_TOKEN: ${MATTERPORT_API_TOKEN:-}
-      VEXCEL_API_KEY: ${VEXCEL_API_KEY:-}
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
@@ -72,6 +68,8 @@ services:
       context: .
       target: backend-tests
     profiles: ["tools"]
+    mem_limit: 1g
+    cpus: 1
     read_only: true
     tmpfs:
       - /tmp
@@ -82,11 +80,14 @@ services:
       dockerfile: apps/frontend/Dockerfile
       target: dashboard-tests
     profiles: ["tools"]
+    mem_limit: 512m
+    cpus: 1
     read_only: true
     tmpfs:
       - /tmp
     environment:
       npm_config_cache: /tmp/npm-cache
+      NODE_OPTIONS: --max-old-space-size=256
 
 volumes:
   app-data:

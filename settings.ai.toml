@@ -9,13 +9,12 @@ llm_enabled = true
 llm_provider = "gemini"
 gemini_model = "gemini-3.8-flash"
 nemotron_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
-llm_max_model_turns = 4
+llm_max_model_turns = 6
 llm_max_tool_calls = 6
 llm_timeout_seconds = 45
 llm_max_output_tokens = 1024
+llm_max_total_output_tokens = 6144
 
 costar_enabled = false
 costar_data_dir = "/app/costardata"
-matterport_enabled = false
-matterport_timeout_seconds = 15
 # costar_snapshot_date is intentionally unset: a file date is not an availability date.

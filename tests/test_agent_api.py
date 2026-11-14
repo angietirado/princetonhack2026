@@ -25,7 +25,22 @@ class ScriptedModel:
 
     async def ainvoke(self, messages, config=None):
         self.calls.append(list(messages))
-        if len(self.calls) % 2:
+        phase = len(self.calls) % 4
+        if phase == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "id": "spending-1",
+                        "args": {
+                            "subagent_type": "spending",
+                            "description": "Summarize November 1 through 13, 2026 in UTC.",
+                        },
+                    }
+                ],
+            )
+        if phase == 2:
             return AIMessage(
                 content="",
                 tool_calls=[
@@ -36,8 +51,10 @@ class ScriptedModel:
                     }
                 ],
             )
-        evidence = json.loads(messages[-1].content)
-        return AIMessage(content=f"Observed spending: {evidence['net_spending_cents']} cents.")
+        if phase == 3:
+            evidence = json.loads(messages[-1].content)
+            return AIMessage(content=f"Observed spending: {evidence['net_spending_cents']} cents.")
+        return AIMessage(content=messages[-1].content)
 
 
 def configured(tmp_path, **overrides):
@@ -69,7 +86,9 @@ def test_http_answer_runs_real_langchain_tools_on_server_bound_data(tmp_path):
         evidence = result["evidence"][0]["result"]
         assert result["status"] == "answered"
         assert str(evidence["net_spending_cents"]) in result["answer"]
-        assert result["model_calls"] == 2 and result["tool_calls"] == 1
+        assert result["model_calls"] == 4 and result["tool_calls"] == 2
+        assert result["evidence"][0]["role"] == "spending"
+        assert result["evidence"][0]["delegation_id"] == "spending-1"
         assert evidence["source"] == "fixture"
         assert evidence["coverage"] == "observed_records_only"
         assert len(result["source_hash"]) == 64

@@ -17,20 +17,37 @@ from spending_api.models import Account, DateRange, Snapshot, Transaction
 
 
 class DiagnosticModel:
-    def __init__(self, model):
+    def __init__(self, model, *, _state=None, _provider_model=None):
         self.model = model
-        self.provider_model = model
-        self.failure = None
-        self.calls = 0
+        self.provider_model = _provider_model if _provider_model is not None else model
+        self._state = _state if _state is not None else {"failure": None, "calls": 0}
+
+    @property
+    def failure(self):
+        return self._state["failure"]
+
+    @failure.setter
+    def failure(self, value):
+        self._state["failure"] = value
+
+    @property
+    def calls(self):
+        return self._state["calls"]
+
+    @calls.setter
+    def calls(self, value):
+        self._state["calls"] = value
 
     def bind_tools(self, tools):
-        self.model = self.model.bind_tools(tools)
-        return self
+        return DiagnosticModel(
+            self.model.bind_tools(tools), _state=self._state, _provider_model=self.provider_model
+        )
 
     async def ainvoke(self, messages, config=None):
-        # Two requests are sufficient for one tool round trip. Never let this
+        # Four shared requests cover advisor delegation, a specialist tool round
+        # trip, and the advisor's final response. Never let this
         # diagnostic wrapper silently spend further calls on a recovery loop.
-        if self.calls >= 2:
+        if self.calls >= 4:
             self.failure = {
                 "type": "LocalCallLimit",
                 "http_status": None,
@@ -124,10 +141,11 @@ async def run(args):
             update={
                 "llm_enabled": True,
                 "llm_provider": provider,
-                "llm_max_model_turns": 3,
+                "llm_max_model_turns": 4,
                 "llm_max_tool_calls": 2,
                 "llm_timeout_seconds": 45,
                 "llm_max_output_tokens": 1024,
+                "llm_max_total_output_tokens": 4096,
                 # Only the in-process helper is exercised; this does not configure a server.
                 "app_api_token": SecretStr("in-process-smoke-only"),
             }
@@ -138,9 +156,10 @@ async def run(args):
             model = DiagnosticModel(create_provider_model(selected))
             result = await answer_spending(
                 tools,
-                "Use summarize_spending for inclusive UTC dates 2026-11-01 to 2026-11-13. "
+                "Delegate to spending with task. The specialist must use summarize_spending "
+                "for inclusive UTC dates 2026-11-01 to 2026-11-13. "
                 "Report the observed net spending in USD and that history completeness is unknown. "
-                "This is a synthetic integration test; do not call other tools.",
+                "This is a synthetic integration test; no planning or other data tools are needed.",
                 selected,
                 model=model,
             )

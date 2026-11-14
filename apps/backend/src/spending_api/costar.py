@@ -1,14 +1,12 @@
 """Bounded, read-only apartment search over the supplied local CoStar data kit.
 
-This module reads three fixed files, never fetches tours, and never treats a
-Matterport reference as an interior observation. Paths are server configuration.
+This module reads two fixed files. Paths are server configuration; no remote
+services or model assets are accessed.
 """
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
 import threading
 from collections import Counter, defaultdict
@@ -21,7 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 FILES = (
     "data/apartment-listing.jsonl",
     "data/commercial-property.jsonl",
-    "commercial-properties.csv",
 )
 AUDIENCES = {1: "general", 2: "senior", 3: "student", 4: "military", 5: "corporate", 6: "vacation"}
 LIMITATIONS = [
@@ -29,8 +26,6 @@ LIMITATIONS = [
     "not the full market.",
     "Asking rents are monthly USD per unit; a low endpoint is not a quote for an available unit.",
     "Recorded availability is historical snapshot evidence, never live availability or a booking.",
-    "Matterport references are metadata only; "
-    "no tour, geometry, accessibility or room fit was checked.",
     "Unknown currency or rent basis, nonpositive rent or availability, "
     "and join conflicts are excluded.",
     "Fees, deposits, concessions, lease terms and eligibility require independent confirmation.",
@@ -48,11 +43,6 @@ class CostarSearchCriteria(BaseModel):
     max_monthly_rent_usd: int = Field(default=1800, ge=1, le=100_000)
     min_square_feet: int = Field(default=0, ge=0, le=10_000)
     limit: int = Field(default=5, ge=1, le=20)
-    require_floor_plan_model: bool = Field(
-        default=False,
-        description="Require a verified floor-plan model reference for later room inspection. "
-        "Shared references may still be unsuitable for inspection.",
-    )
     include_specialized_housing: bool = False
 
     @field_validator("city")
@@ -91,22 +81,6 @@ def _rows(value: Any) -> list[dict]:
 
 def _text(value: Any, limit: int = 200) -> str | None:
     return value[:limit] if isinstance(value, str) and value.strip() else None
-
-
-def _keys(attachments: Any) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            {
-                row["videoKey"]
-                for row in _rows(attachments)
-                if type(row.get("videoExternalReferenceType")) is int
-                and row["videoExternalReferenceType"] in {36, 234}
-                and isinstance(row.get("videoKey"), str)
-                and row["videoKey"].strip() == row["videoKey"]
-                and 0 < len(row["videoKey"]) <= 100
-            }
-        )
-    )
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict:
@@ -199,46 +173,8 @@ class CostarCatalog:
                 yield line_number, row
         hashes[relative], counts[relative] = digest.hexdigest(), count
 
-    def _catalog(self, hashes: dict, counts: dict):
-        path = self._path(FILES[2])
-        # The model CSV is much smaller than property records; cap it separately.
-        limit = min(self._max_file_bytes, 8 * 1024 * 1024)
-        with path.open("rb") as stream:
-            raw = stream.read(limit + 1)
-        if len(raw) > limit:
-            raise _CatalogError("catalog_limit_exceeded")
-        hashes[FILES[2]] = hashlib.sha256(raw).hexdigest()
-        reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
-        headers = reader.fieldnames or []
-        if len(headers) != len(set(headers)) or not {"PropertyId", "MatterportModelId"} <= set(
-            headers
-        ):
-            raise _CatalogError("invalid_catalog")
-        catalog, owners = defaultdict(set), defaultdict(set)
-        count = 0
-        for count, row in enumerate(reader, 1):
-            if count > self._max_records:
-                raise _CatalogError("catalog_limit_exceeded")
-            property_text, key = row.get("PropertyId"), row.get("MatterportModelId")
-            if (
-                not property_text
-                or not property_text.isascii()
-                or not property_text.isdecimal()
-                or not _positive(int(property_text))
-            ):
-                raise _CatalogError("invalid_catalog")
-            if not isinstance(key, str) or len(key) > 100 or key != key.strip():
-                raise _CatalogError("invalid_catalog")
-            property_id = int(property_text)
-            if key:
-                catalog[property_id].add(key)
-                owners[key].add(property_id)
-        counts[FILES[2]] = count
-        return catalog, owners
-
     def _load(self) -> dict:
         hashes, counts = {}, {}
-        catalog, owners = self._catalog(hashes, counts)
         properties = {}
         plan_count = 0
         for line, row in self._json_rows(FILES[1], hashes, counts):
@@ -246,7 +182,7 @@ class CostarCatalog:
             if not _positive(property_id):
                 raise _CatalogError("invalid_catalog")
             address = _object(row.get("primaryAddress"))
-            models = {}
+            models = set()
             for model in _rows(_object(row.get("propertyApartment")).get("models")):
                 plan_count += 1
                 if plan_count > self._max_floor_plans:
@@ -254,38 +190,15 @@ class CostarCatalog:
                 model_id = model.get("id")
                 if not _positive(model_id):
                     continue
-                entry = {
-                    "floor_plan": _keys(model.get("attachments")),
-                    "example_unit": tuple(
-                        sorted(
-                            {
-                                key
-                                for unit in _rows(model.get("units"))
-                                for key in _keys(unit.get("attachments"))
-                            }
-                        )
-                    ),
-                }
-                if model_id in models and models[model_id] != entry:
-                    models[model_id] = None  # Never recover an ambiguous key by row order.
-                else:
-                    models[model_id] = entry
+                models.add(model_id)
             projected = {
                 "state": _text(address.get("state")),
                 "city": _text(address.get("city")),
                 "models": models,
-                "community_only": _keys(row.get("attachments")),
             }
             if property_id in properties and properties[property_id][0] != projected:
                 raise _CatalogError("conflicting_property_records")
             properties.setdefault(property_id, (projected, line))
-
-        plan_owners = defaultdict(set)
-        for property_id, (prop, _) in properties.items():
-            for plan_id, model in prop["models"].items():
-                if model:
-                    for key in model["floor_plan"]:
-                        plan_owners[(property_id, key)].add(plan_id)
 
         candidates, duplicate_fingerprints, listing_identities = {}, defaultdict(set), {}
         listing_plan_count = 0
@@ -342,9 +255,6 @@ class CostarCatalog:
             "hashes": hashes,
             "counts": counts,
             "properties": properties,
-            "catalog": catalog,
-            "owners": owners,
-            "plan_owners": plan_owners,
             "candidates": candidates,
             "conflicts": conflicts,
             "listing_plan_count": listing_plan_count,
@@ -392,22 +302,6 @@ class CostarCatalog:
             return None, "area_unknown_or_too_small"
         if key[1] not in prop["models"]:
             return None, "floor_plan_join_missing"
-        model = prop["models"][key[1]]
-        if model is None:
-            return None, "conflicting_floor_plan_models"
-        scopes = {**model, "community_only": prop["community_only"]}
-        allowed = snapshot["catalog"].get(key[0], set())
-        verified = {scope: sorted(set(keys) & allowed) for scope, keys in scopes.items()}
-        unmatched_count = len({value for keys in scopes.values() for value in keys} - allowed)
-        scope = next(
-            (name for name in ("floor_plan", "example_unit", "community_only") if verified[name]),
-            "no_scan",
-        )
-        if criteria.require_floor_plan_model and scope != "floor_plan":
-            return None, "verified_floor_plan_model_missing"
-        selected = verified.get(scope, [])
-        reused = any(len(snapshot["owners"][value]) > 1 for value in selected)
-        shared_plan = any(len(snapshot["plan_owners"][(key[0], value)]) > 1 for value in selected)
         return {
             "property_id": key[0],
             "floor_plan_id": key[1],
@@ -429,17 +323,6 @@ class CostarCatalog:
             "price_range_within_budget": high is not None and high <= criteria.max_monthly_rent_usd,
             "recorded_units_available": plan["numUnitsAvailable"],
             "availability_is_live": False,
-            "matterport": {
-                "scope": scope,
-                "model_ids": selected[:20],
-                "model_reference_count": len(selected),
-                "model_references_truncated": len(selected) > 20,
-                "same_property_catalog_checked": True,
-                "unmatched_catalog_reference_count": unmatched_count,
-                "shared_across_properties": reused,
-                "shared_across_floor_plans": shared_plan,
-                "interior_observation_performed": False,
-            },
             "evidence": [
                 {
                     "file": FILES[0],
@@ -453,7 +336,6 @@ class CostarCatalog:
                     "property_id": key[0],
                     "floor_plan_id": key[1],
                 },
-                {"file": FILES[2], "join": "PropertyId + MatterportModelId", "property_id": key[0]},
             ],
         }, None
 
@@ -470,8 +352,6 @@ class CostarCatalog:
                 "currency": "monetaryUnit 1 = USD; unknown values are excluded",
                 "rent_basis": "rentPricingType 1 = monthly per unit",
                 "floor_plan_join": "listing.propertyId + apartmentModels.id",
-                "matterport_types": [36, 234],
-                "matterport_catalog_join": "PropertyId + MatterportModelId",
             },
         }
         if self._directory is None:
@@ -524,6 +404,6 @@ class CostarCatalog:
             reason = "catalog_files_missing"
         except _CatalogError as error:
             reason = str(error)
-        except (OSError, UnicodeError, json.JSONDecodeError, csv.Error, RecursionError, ValueError):
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError):
             reason = "invalid_catalog"
         return {**base, "status": "unavailable", "reason": reason, "results": [], "coverage": {}}

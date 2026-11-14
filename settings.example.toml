@@ -10,6 +10,7 @@ photon_api_base_url = "https://api.photon.codes/v1"
 photon_project_id = ""
 photon_agent_user_id = ""
 photon_allowed_sender_id = ""
+photon_platform = "sms"
 photon_inbox_path = ".data/photon-inbox.sqlite3"
 
 # Credential-free checks leave both integrations disabled.
@@ -19,5 +20,3 @@ gemini_model = "gemini-3.8-flash"
 nemotron_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
 costar_enabled = false
 costar_data_dir = "/app/costardata"
-matterport_enabled = false
-matterport_timeout_seconds = 15

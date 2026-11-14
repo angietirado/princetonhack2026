@@ -1,6 +1,6 @@
 # Spending Companion
 
-A hackathon app for analyzing Nessie v2 spending. The Ledgerly dashboard and terminal use the same pinned customer's backend data. Photon phone conversations are deferred. Docker Compose runs the dashboard, FastAPI backend, and separate data generator. A minimal React source scaffold remains in `apps/frontend`; the default dashboard is the root HTML/JavaScript application.
+A hackathon app for analyzing Nessie v2 spending. The Ledgerly dashboard and terminal use the same pinned customer's backend data. Optional Photon quick controls use the same deterministic spending tools. Docker Compose runs the dashboard, FastAPI backend, and separate data generator. A minimal React source scaffold remains in `apps/frontend`; the default dashboard is the root HTML/JavaScript application.
 
 The project plan and decision log live in [docs/DESIGN.md](docs/DESIGN.md). The [integration guide](docs/INTEGRATIONS.md) covers credentials and provider setup; the [frontend handoff](apps/frontend/README.md) describes the API contract.
 
@@ -96,7 +96,7 @@ docker compose --env-file .env.example exec -T backend python -m spending_api.te
 
 ## LangChain assistant
 
-The backend supports Gemini and NVIDIA Nemotron through LangChain. It exposes read-only tools, with server-bound customer data, bounded model/tool calls, and evidence alongside each answer. AI is disabled in the default offline settings.
+The backend uses a LangChain advisor with Deep Agents delegation to spending and optional local-research specialists, backed by Gemini or NVIDIA Nemotron. It exposes read-only tools, with server-bound customer data, bounded model/tool calls, and evidence alongside each answer. AI is disabled in the default offline settings.
 
 In your ignored `.env`, set `GEMINI_API_KEY` or `NVIDIA_API_KEY`, retain or create `APP_API_TOKEN`, and set `APP_SETTINGS_FILE=./settings.ai.toml`. Select `llm_provider = "gemini"` or `"nemotron"` in `settings.ai.toml`. This file uses generated fixture data so the first AI run needs no Nessie credential. See [key setup and limitations](docs/INTEGRATIONS.md#ai-agents).
 
@@ -116,7 +116,7 @@ Open **http://127.0.0.1:5173**, unlock with `APP_API_TOKEN`, and select **Ask yo
 
 The same interface is available at **http://127.0.0.1:8765/docs**: choose **Authorize**, enter `APP_API_TOKEN`, and invoke `POST /api/v1/agent/answer` with `{"question":"Summarize spending from 2026-11-01 through 2026-11-13."}`. `GET /api/v1/agent/status` reports the selected provider without exposing keys.
 
-The answer's `status` must be `answered` before treating its prose as a completed response. `limited` or `unavailable` responses explain the failure and can include partial tool evidence. Evidence is calculated from observed records; model prose is an interpretation, and missing history is not proof of zero spending. Recurring results remain candidates.
+The answer's `status` must be `answered` before treating its prose as a completed response. `clarification` asks for missing inputs; resubmit a complete question. `limited` or `unavailable` responses explain the failure and can include partial tool evidence. Evidence is calculated from observed records; model prose is an interpretation, and missing history is not proof of zero spending. Recurring results remain candidates.
 
 ## CoStar catalog search
 
@@ -127,7 +127,7 @@ APP_SETTINGS_FILE=./settings.catalog.toml
 APP_API_TOKEN=your-own-app-token
 ```
 
-The public `settings.catalog.toml` uses generated spending fixtures, enables the local catalog, and disables AI, Matterport, and Photon. No Nessie, Gemini, NVIDIA, or spatial vendor key is required. The data kit must contain `data/apartment-listing.jsonl`, `data/commercial-property.jsonl`, and `commercial-properties.csv`. Use the project-switch instructions above if the default quickstart still occupies the ports, then start with the read-only catalog mount:
+The public `settings.catalog.toml` uses generated spending fixtures, enables the local catalog, and disables AI and Photon. No Nessie, Gemini, or NVIDIA key is required. The data kit must contain `data/apartment-listing.jsonl` and `data/commercial-property.jsonl`. Use the project-switch instructions above if the default quickstart still occupies the ports, then start with the read-only catalog mount:
 
 ```sh
 docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml up --build --detach --wait
@@ -141,19 +141,17 @@ In the API docs, choose **Authorize**, enter `APP_API_TOKEN`, and try `POST /api
 
 For explicit search inputs, open **Ask your books** and use the apartment-filter form. Choose state, optional city, bedrooms, maximum starting rent, and minimum area, then submit. It calls the local catalog directly, checks that the returned filters match your choices, and shows up to three results without a model call. This form also works with `llm_enabled = false` and `costar_enabled = true`. Starting rent is the low end of a recorded asking range; review the full range and any unknown upper endpoint.
 
-Results include recorded rent ranges, source evidence, coverage limits, and associated Matterport IDs. An asking-rent minimum below the filter does not mean the whole range is affordable; check `price_range_within_budget`. Availability is historical, and a model reference does not mean an interior was inspected.
+Results include recorded rent ranges, source evidence, and coverage limits. An asking-rent minimum below the filter does not mean the whole range is affordable; check `price_range_within_budget`. Availability is historical. The catalog reads two fixed JSONL files and ignores model assets and imagery.
 
-For a live Matterport evidence read, also set `matterport_enabled = true`, fill the backend API key/token pair, and recreate the backend. `POST /api/v1/costar/inspect` accepts the same search `criteria` plus a returned `property_id` and `floor_plan_id`. It resolves an unambiguous catalog model itself; callers cannot supply a model ID, URL, or GraphQL. The AI gains an `inspect_floor_plan` tool when this is enabled. Rooms and measurements retain their returned units; null dimensions remain unknown. Area alone does not prove furniture fit. No booking, room-boundary/obstacle inspection, or Vexcel imagery extraction is implemented.
+The earlier Matterport/Vexcel prototype is preserved only on local branch `archive/spatial-prototype-20261114` at `6917d8d`. Its route, controls, configuration, and credential wiring have been removed from this branch.
 
-Eligible apartment rows in **Ask your books** also offer **Inspect this floor plan**. This reads the selected plan directly without another model question and displays its measurements separately from the AI answer. The selection retains the search filters and catalog revision; changed or mismatched evidence requires a fresh search. **Stop waiting** discards any later response but does not guarantee cancellation of a provider request already in progress.
-
-When AI and Matterport are enabled, you can also ask the running API from the backend terminal:
+You can also ask the running API from the backend terminal:
 
 ```sh
-docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas under 1800 USD monthly with a verified floor-plan model reference, then inspect one unambiguous plan."
+docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas with starting rent under 1800 USD monthly. Show full asking ranges and historical availability caveats."
 ```
 
-The terminal sends one authenticated request to the same local API and prints the answer, evidence, and limitations. It exits unsuccessfully for incomplete answers. The full question is required on each call; no conversation memory is stored.
+The terminal makes one authenticated request to the local API. Each question needs its own dates and filters; conversation memory is not yet persisted.
 
 ## What runs today
 
@@ -161,13 +159,13 @@ The terminal sends one authenticated request to the same local API and prints th
 - Provider-neutral Python tools for agents, backed by deterministic calculations in integer cents.
 - A deterministic data generator and an opt-in Nessie v2 historical simulation command.
 - The connected Ledgerly dashboard: cash/card balances, expense-category and monthly charts, date filters, searchable transactions, recurring candidates, and CSV exports.
-- Photon 2.0 signature verification, sender filtering, a durable SQLite inbox, and an explicit outbound transport function.
+- Photon 2.0 signature verification, scoped enrollment, durable inbox/replies, and an explicit one-job quick-control worker.
 
-Opt-in LangChain AI orchestration is implemented for the question API. The inbox worker that sends phone replies is **not implemented yet**. Photon is disabled in the MVP settings; enabling its receiver later only queues events. The pinned Nessie customer comes from a completed 300-transaction historical simulation. Credentials are not committed.
+Opt-in LangChain AI orchestration is implemented for the question API. Photon stays disabled by default. Its receiver only queues events; the [quick-control worker](docs/INTEGRATIONS.md#photon-20-beta-quick-controls) prepares one reply, and sends only with an explicit `--send`. No phone delivery has been verified. The pinned Nessie customer comes from a completed 300-transaction historical simulation. Credentials are not committed.
 
 ## Checks with Docker
 
-Run backend configuration/API tests and dashboard DOM regression tests inside Docker:
+Run backend configuration/API tests and dashboard DOM regression tests inside Docker, one service at a time. Test containers are capped at 1 GiB and 512 MiB respectively:
 
 ```sh
 docker compose --env-file .env.example --profile tools run --build --rm backend-tests
