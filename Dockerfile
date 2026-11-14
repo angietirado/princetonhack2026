@@ -13,7 +13,7 @@ COPY tests/ tests/
 COPY data/scenarios.json data/scenarios.json
 COPY scripts/ scripts/
 ENV PYTHONDONTWRITEBYTECODE=1
-CMD ["sh", "-c", "/app/.venv/bin/pytest -q -p no:cacheprovider tests/test_lab_*.py"]
+CMD ["sh", "-c", "/app/.venv/bin/pytest -q -p no:cacheprovider tests/test_lab_*.py tests/test_capture_nessie_wallet.py"]
 
 FROM python-build AS backend-build
 COPY apps/backend/src apps/backend/src
