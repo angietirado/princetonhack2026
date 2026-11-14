@@ -28,6 +28,11 @@
   let inspectionController = null;
   let inspectionTimer = null;
   let inspectionPending = false;
+  let catalogSequence = 0;
+  let catalogController = null;
+  let catalogTimer = null;
+  let catalogPending = false;
+  let catalogModelDefaultSet = false;
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -164,28 +169,36 @@
   function clearAskAnswer() {
     answerContext += 1;
     clearInspection();
+    clearCatalog();
     $("ask-result").classList.add("hidden");
     for (const id of ["ask-outcome", "ask-asked-question", "ask-answer", "ask-usage", "ask-source"]) $(id).textContent = "";
     $("ask-caveats").replaceChildren();
     $("ask-evidence").replaceChildren();
   }
   function updateAskControls() {
-    const ready = Boolean(data && !dashboardLoading && askStatus?.enabled && !askStatusLoading && !askPending && !inspectionPending);
+    const idle = Boolean(data && !dashboardLoading && !askStatusLoading && !askPending && !inspectionPending && !catalogPending);
+    const ready = idle && askStatus?.enabled;
     $("ask-question").disabled = !ready;
     $("ask-submit").disabled = !ready || !$("ask-question").value.trim();
     $("ask-submit").textContent = askPending ? "Working…" : "Ask →";
-    $("ask-check").disabled = !data || dashboardLoading || askPending || askStatusLoading || inspectionPending;
+    $("ask-check").disabled = !idle;
     $("ask-example-spending").disabled = !ready;
     $("ask-example-housing").disabled = !ready;
     $("ask-example-housing").classList.toggle("hidden", askStatus?.costar_enabled !== true);
     $("ask-counter").textContent = $("ask-question").value.length + " / 2000 characters";
     $("ask-form").setAttribute("aria-busy", String(askPending));
     document.querySelectorAll(".inspect-floor-plan").forEach((button) => {
-      button.disabled = !data || dashboardLoading || askPending || askStatusLoading || inspectionPending || askStatus?.matterport_enabled !== true;
+      button.disabled = !idle || askStatus?.matterport_enabled !== true;
       button.classList.toggle("hidden", askStatus?.matterport_enabled !== true);
     });
     $("inspection-cancel").classList.toggle("hidden", !inspectionPending);
     $("inspection-result").setAttribute("aria-busy", String(inspectionPending));
+    const catalogReady = idle && askStatus?.costar_enabled === true;
+    for (const id of ["catalog-state", "catalog-city", "catalog-bedrooms", "catalog-rent", "catalog-area", "catalog-model", "catalog-submit"]) $(id).disabled = !catalogReady;
+    $("catalog-submit").textContent = catalogPending ? "Searching…" : "Search catalog";
+    $("catalog-cancel").classList.toggle("hidden", !catalogPending);
+    $("catalog-form").setAttribute("aria-busy", String(catalogPending));
+    $("catalog-availability").textContent = askStatus?.costar_enabled === true ? "Direct catalog search is available, including when AI is disabled." : askStatus ? "The apartment catalog is disabled for this workspace." : "Check availability above to search.";
   }
   function resetAsk() {
     askSequence += 1;
@@ -195,6 +208,8 @@
     askStatus = null;
     askStatusLoading = false;
     askPending = false;
+    catalogModelDefaultSet = false;
+    $("catalog-form").reset();
     $("ask-question").value = "";
     $("ask-provider").textContent = "Check availability to start.";
     $("ask-state").textContent = "";
@@ -220,7 +235,7 @@
     }, milliseconds);
   }
   async function loadAskStatus(force = false) {
-    if (!data || dashboardLoading || askPending || inspectionPending || askStatusLoading || (askStatus && !force)) return;
+    if (!data || dashboardLoading || askPending || inspectionPending || catalogPending || askStatusLoading || (askStatus && !force)) return;
     const requestId = ++askSequence;
     askController?.abort();
     askController = new AbortController();
@@ -239,6 +254,7 @@
       if (requestId !== askSequence) return;
       if (!status || typeof status.enabled !== "boolean" || typeof status.provider !== "string" || typeof status.model !== "string" || status.provider.length > 160 || status.model.length > 160) throw new Error("invalid status");
       askStatus = status;
+      if (!catalogModelDefaultSet) { $("catalog-model").checked = status.matterport_enabled === true; catalogModelDefaultSet = true; }
       $("ask-provider").textContent = status.enabled ? label(status.provider) + " · " + status.model + " · Read-only tools" : "AI is disabled for this workspace. Your spending dashboard remains available.";
     } catch (error) {
       if (requestId !== askSequence || error.name === "AbortError") return;
@@ -251,7 +267,7 @@
   $("ask-check").addEventListener("click", () => void loadAskStatus(true));
   $("ask-question").addEventListener("input", () => { $("ask-error").textContent = ""; updateAskControls(); });
   $("ask-example-spending").addEventListener("click", () => {
-    if (!askStatus?.enabled || askPending || inspectionPending) return;
+    if (!askStatus?.enabled || askPending || inspectionPending || catalogPending) return;
     const start = data?.summary.start || "[start date]";
     const end = data?.summary.end || "[end date]";
     $("ask-question").value = "Summarize my observed spending from " + start + " through " + end + " in UTC. Include refunds, exclusions, and missing-history caveats.";
@@ -259,7 +275,7 @@
     $("ask-question").focus();
   });
   $("ask-example-housing").addEventListener("click", () => {
-    if (!askStatus?.enabled || !askStatus.costar_enabled || askPending || inspectionPending) return;
+    if (!askStatus?.enabled || !askStatus.costar_enabled || askPending || inspectionPending || catalogPending) return;
     $("ask-question").value = "Find up to 3 one-bedroom apartments in TX under $1,800 monthly asking rent. Show each full rent range and recorded availability limitations." + (askStatus.matterport_enabled ? " Return only plans with verified floor-plan model references. Do not inspect yet; I will choose a floor plan." : "");
     updateAskControls();
     $("ask-question").focus();
@@ -274,6 +290,103 @@
       [["bedrooms", 0, 6], ["max_monthly_rent_usd", 1, 100000], ["min_square_feet", 0, 10000], ["limit", 1, 20]].every(([key, low, high]) => Number.isSafeInteger(criteria[key]) && criteria[key] >= low && criteria[key] <= high) &&
       typeof criteria.require_floor_plan_model === "boolean" && typeof criteria.include_specialized_housing === "boolean";
   }
+  function clearCatalog() {
+    catalogSequence += 1;
+    catalogController?.abort();
+    clearTimeout(catalogTimer);
+    catalogController = null;
+    catalogPending = false;
+    $("catalog-result").classList.add("hidden");
+    for (const id of ["catalog-state-message", "catalog-error", "catalog-source"]) $(id).textContent = "";
+    $("catalog-evidence").replaceChildren();
+  }
+  function readCatalogCriteria() {
+    const integer = (id, optional = false) => {
+      const text = $(id).value.trim();
+      if (optional && !text) return 0;
+      return /^\d+$/.test(text) ? Number(text) : NaN;
+    };
+    return {
+      state: $("catalog-state").value, city: $("catalog-city").value.trim() || null,
+      bedrooms: integer("catalog-bedrooms"), max_monthly_rent_usd: integer("catalog-rent"),
+      min_square_feet: integer("catalog-area", true), limit: 3,
+      require_floor_plan_model: $("catalog-model").checked, include_specialized_housing: false,
+    };
+  }
+  function sameCatalogCriteria(actual, expected) {
+    return canonicalCriteria(actual) && Object.keys(expected).every((key) => actual[key] === expected[key]);
+  }
+  function validCatalogResult(result) {
+    return object(result) && result.status === "ok" && result.source_kind === "costar_local_snapshot" &&
+      typeof result.source_hash === "string" && /^[a-f0-9]{64}$/.test(result.source_hash) &&
+      Array.isArray(result.results) && result.results.length <= 3 && result.results.every(object) &&
+      Array.isArray(result.limitations) && result.limitations.every((item) => typeof item === "string") &&
+      JSON.stringify(result).length <= 96000;
+  }
+  $("catalog-cancel").addEventListener("click", () => {
+    if (!catalogPending) return;
+    clearCatalog();
+    $("catalog-state-message").textContent = "Stopped waiting for the catalog search. No result was accepted.";
+    updateAskControls();
+  });
+  $("catalog-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!data || dashboardLoading || askStatus?.costar_enabled !== true || askStatusLoading || askPending || inspectionPending || catalogPending) return;
+    const criteria = readCatalogCriteria();
+    if (!canonicalCriteria(criteria)) {
+      $("catalog-error").textContent = "Use TX or CA, a city of at most 80 characters without control characters, 0–6 bedrooms, a whole-dollar starting rent from 1 to 100,000, and an optional whole-number area from 0 to 10,000 square feet.";
+      return;
+    }
+    Object.freeze(criteria);
+    clearAskAnswer();
+    const requestId = catalogSequence;
+    const context = answerContext;
+    catalogController = new AbortController();
+    catalogPending = true;
+    $("ask-error").textContent = "";
+    $("ask-state").textContent = "";
+    $("catalog-state-message").textContent = "Searching the local catalog with your submitted filters…";
+    updateAskControls();
+    catalogTimer = setTimeout(() => {
+      if (requestId !== catalogSequence || context !== answerContext) return;
+      catalogSequence += 1;
+      catalogController?.abort();
+      catalogPending = false;
+      $("catalog-state-message").textContent = "";
+      $("catalog-error").textContent = "The catalog search timed out. No result was accepted; you may try again.";
+      updateAskControls();
+    }, 60000);
+    try {
+      const response = await fetch("/api/v1/costar/search", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify(criteria), cache: "no-store", redirect: "error", signal: catalogController.signal });
+      if (requestId !== catalogSequence || context !== answerContext) return;
+      if (response.status === 401) { lock(); $("access-error").textContent = "Your app token was not accepted. Unlock again to search the catalog."; return; }
+      if (!response.ok) {
+        $("catalog-error").textContent = ({ 403: "The catalog search was not authorized.", 422: "The catalog rejected these filters. Check the fields before submitting again.", 429: "Another catalog search is running. Wait briefly before trying again.", 503: "The catalog is disabled or unavailable. Check availability before trying again.", 504: "The catalog search reached its time limit. No result was accepted." })[response.status] || "The catalog search could not be completed. No results were accepted.";
+        return;
+      }
+      const result = await response.json();
+      if (requestId !== catalogSequence || context !== answerContext) return;
+      if (object(result) && result.status === "unavailable") { $("catalog-error").textContent = "The catalog is unavailable. No results were accepted."; return; }
+      if (!object(result) || !sameCatalogCriteria(result.criteria, criteria)) {
+        $("catalog-error").textContent = "The returned filters did not match your submitted search. No results were accepted; check availability before searching again.";
+        return;
+      }
+      if (!validCatalogResult(result)) throw new Error("invalid catalog response");
+      $("catalog-source").textContent = "Catalog revision: " + result.source_hash;
+      $("catalog-evidence").append(renderToolEvidence({ tool: "costar_search", arguments: criteria, result }, true));
+      $("catalog-result").classList.remove("hidden");
+    } catch (error) {
+      if (requestId !== catalogSequence || context !== answerContext || error.name === "AbortError") return;
+      $("catalog-error").textContent = "A valid catalog response could not be received. No results were accepted.";
+    } finally {
+      if (requestId === catalogSequence && context === answerContext) {
+        clearTimeout(catalogTimer);
+        catalogPending = false;
+        $("catalog-state-message").textContent = "";
+        updateAskControls();
+      }
+    }
+  });
   function inspectionSelection(result, row) {
     const metadata = row.matterport;
     if (askStatus?.matterport_enabled !== true || result.source_kind !== "costar_local_snapshot" ||
@@ -319,7 +432,7 @@
       JSON.stringify(result).length <= 32000;
   }
   async function inspectSelection(selection, button) {
-    if (selection.context !== answerContext || !button.isConnected || !data || dashboardLoading || askPending || askStatusLoading || inspectionPending || askStatus?.matterport_enabled !== true) return;
+    if (selection.context !== answerContext || !button.isConnected || !data || dashboardLoading || askPending || askStatusLoading || inspectionPending || catalogPending || askStatus?.matterport_enabled !== true) return;
     clearInspection();
     const requestId = inspectionSequence;
     inspectionController = new AbortController();
@@ -377,7 +490,7 @@
       JSON.stringify(value).length <= 512000;
   }
   const reported = (value, unit) => typeof value === "number" && Number.isFinite(value) ? value + " " + unit : "unknown";
-  function renderToolEvidence(entry, directInspection = false) {
+  function renderToolEvidence(entry, directRequest = false) {
     const result = entry.result;
     const host = node("article", undefined, "ask-evidence-item");
     const titles = { summarize_spending: "Observed spending", get_transactions: "Transaction records", find_recurring_charges: "Recurring candidates", costar_search: "Apartment matches", inspect_floor_plan: "Room measurements" };
@@ -396,9 +509,9 @@
         const budget = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(criteria.max_monthly_rent_usd);
         host.append(node("p", "Applied catalog filters: " + criteria.state + (criteria.city ? ", " + criteria.city : ", any city") +
           "; " + (criteria.bedrooms === 0 ? "studio" : criteria.bedrooms + " bedroom(s)") +
-          "; advertised starting rent at most " + budget + " per month, per unit; at least " + criteria.min_square_feet + " square feet; up to " + criteria.limit + " results; " +
+          "; advertised starting rent at most " + budget + " per month, per unit; " + (criteria.min_square_feet ? "at least " + criteria.min_square_feet + " square feet" : "no minimum area") + "; up to " + criteria.limit + " results; " +
           (criteria.require_floor_plan_model ? "verified floor-plan model references required" : "floor-plan model references optional") + "; " +
-          (criteria.include_specialized_housing ? "specialized housing included" : "specialized housing excluded") + ". Compare these applied filters with your question.", "ask-applied-criteria"));
+          (criteria.include_specialized_housing ? "specialized housing included" : "specialized housing excluded") + (directRequest ? ". These are your submitted filters." : ". Compare these applied filters with your question."), "ask-applied-criteria"));
       } else host.append(node("p", "Applied catalog filters are unavailable or unrecognized. Review the exact evidence before relying on these matches.", "ask-applied-criteria"));
       host.append(node("p", result.results.length + " recorded matches shown. Availability is not live; the local catalog is not the whole market."));
       if (result.results.length > 20) host.append(node("p", "The first 20 matches are summarized below; all returned records remain in the exact evidence."));
@@ -444,7 +557,7 @@
       host.append(list);
     }
     const details = node("details");
-    details.append(node("summary", directInspection ? "Exact inspection request and response" : "Exact tool evidence"), node("pre", JSON.stringify(directInspection ? { request: entry.arguments, response: result } : entry, null, 2)));
+    details.append(node("summary", directRequest ? (entry.tool === "costar_search" ? "Exact catalog request and response" : "Exact inspection request and response") : "Exact tool evidence"), node("pre", JSON.stringify(directRequest ? { request: entry.arguments, response: result } : entry, null, 2)));
     host.append(details);
     return host;
   }
@@ -462,7 +575,7 @@
   }
   $("ask-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!data || dashboardLoading || !askStatus?.enabled || askStatusLoading || askPending || inspectionPending) return;
+    if (!data || dashboardLoading || !askStatus?.enabled || askStatusLoading || askPending || inspectionPending || catalogPending) return;
     const question = $("ask-question").value.trim();
     if (!question || $("ask-question").value.length > 2000) { $("ask-error").textContent = "Enter a question of 1 to 2000 characters."; return; }
     const requestId = ++askSequence;

@@ -779,3 +779,254 @@ test("inspection deadline releases controls, rejects its late response, and perf
   assert.equal(app.get("inspection-evidence").children.length, 0);
   assert.match(app.get("inspection-error").textContent, /timed out/);
 });
+
+function directCriteria(overrides = {}) {
+  return selectionCriteria({ limit: 3, ...overrides });
+}
+function catalogResponse(criteria = directCriteria()) {
+  const result = structuredClone(shortlistAnswer().evidence[0].result);
+  result.criteria = criteria;
+  for (const row of result.results) {
+    row.asking_rent.minimum = Math.min(row.asking_rent.minimum, criteria.max_monthly_rent_usd);
+    row.asking_rent.maximum = Math.min(row.asking_rent.maximum, criteria.max_monthly_rent_usd);
+  }
+  return result;
+}
+function catalogRoute(url, options) {
+  if (url === "/api/v1/agent/status") return response(agentStatus({ enabled: false, costar_enabled: true, matterport_enabled: true }));
+  if (url === "/api/v1/costar/search") return response(catalogResponse(JSON.parse(options.body)));
+  return inspectionRoute(url);
+}
+async function showCatalog(app) {
+  await tick(); await openAsk(app); app.submit("catalog-form"); await tick();
+}
+
+test("direct catalog search works with AI disabled and sends the exact explicit filters with memory auth", async (t) => {
+  const app = boot(t, (url, options) => options.headers.Authorization === "Bearer catalog-only-token" ? catalogRoute(url, options) : response({}, 401));
+  await tick(); app.get("app-token").value = "catalog-only-token"; app.submit("access-form"); await tick();
+  const before = app.calls.length; await openAsk(app);
+  assert.equal(app.calls.length, before + 1);
+  assert.equal(app.get("ask-submit").disabled, true);
+  assert.equal(app.get("catalog-submit").disabled, false);
+  assert.equal(app.get("catalog-model").checked, true);
+  app.change("catalog-state", "CA"); app.change("catalog-city", "  Sacramento  ");
+  app.change("catalog-bedrooms", "0"); app.change("catalog-rent", "1000"); app.change("catalog-area", "650");
+  app.get("catalog-model").checked = false;
+  assert.equal(app.calls.length, before + 1, "editing filters never searches");
+  app.submit("catalog-form"); await tick();
+  const request = app.calls.at(-1);
+  const expected = directCriteria({ state: "CA", city: "Sacramento", bedrooms: 0, max_monthly_rent_usd: 1000, min_square_feet: 650, require_floor_plan_model: false });
+  assert.equal(request.url, "/api/v1/costar/search");
+  assert.equal(request.options.method, "POST");
+  assert.equal(request.options.redirect, "error");
+  assert.equal(request.options.cache, "no-store");
+  assert.equal(request.options.headers.Authorization, "Bearer catalog-only-token");
+  assert.deepEqual(JSON.parse(request.options.body), expected);
+  assert.equal(app.get("catalog-result").classList.contains("hidden"), false);
+  assert.equal(app.get("ask-result").classList.contains("hidden"), true);
+  assert.equal(app.get("ask-answer").textContent, "");
+  assert.match(app.get("catalog-evidence").querySelector(".ask-applied-criteria").textContent, /CA, Sacramento; studio; advertised starting rent at most \$1,000/);
+  const exact = JSON.parse(app.get("catalog-evidence").querySelector("pre").textContent);
+  assert.deepEqual(exact.request, expected);
+  assert.equal(Object.hasOwn(exact, "tool"), false);
+  assert.equal(app.calls.some((call) => call.url === "/api/v1/agent/answer"), false);
+  assert.equal(app.window.localStorage.length, 0);
+  assert.equal(app.window.sessionStorage.length, 0);
+  assert.doesNotMatch(app.document.documentElement.outerHTML, /catalog-only-token/);
+});
+
+test("direct catalog default model filter follows inspection availability while explicit edits survive status checks", async (t) => {
+  let matterport = false;
+  let catalog = true;
+  const app = boot(t, (url, options) => url === "/api/v1/agent/status" ? response(agentStatus({ enabled: false, costar_enabled: catalog, matterport_enabled: matterport })) : catalogRoute(url, options));
+  await tick(); await openAsk(app);
+  assert.equal(app.get("catalog-model").checked, false);
+  assert.equal(app.get("catalog-submit").disabled, false);
+  app.get("catalog-model").checked = true;
+  app.click("ask-check"); await tick();
+  assert.equal(app.get("catalog-model").checked, true);
+  catalog = false; app.click("ask-check"); await tick();
+  assert.equal(app.get("catalog-submit").disabled, true);
+  app.submit("catalog-form"); await tick();
+  assert.equal(app.calls.some((call) => call.url === "/api/v1/costar/search"), false);
+});
+
+test("direct catalog rejects invalid field values before any search", async (t) => {
+  const app = boot(t, catalogRoute);
+  await tick(); await openAsk(app);
+  for (const [id, value] of [["catalog-state", "NY"], ["catalog-city", "x".repeat(81)], ["catalog-city", "A\u0001B"],
+    ["catalog-bedrooms", "7"], ["catalog-rent", ""], ["catalog-rent", "0"], ["catalog-rent", "100001"],
+    ["catalog-rent", "1000.5"], ["catalog-rent", "1e3"], ["catalog-area", "-1"], ["catalog-area", "10001"], ["catalog-area", "0.5"]]) {
+    app.get("catalog-form").reset(); app.change(id, value); app.submit("catalog-form"); await tick();
+    assert.match(app.get("catalog-error").textContent, /Use TX or CA/, id + "=" + value);
+    assert.equal(app.calls.some((call) => call.url === "/api/v1/costar/search"), false);
+  }
+  app.get("catalog-form").reset(); app.change("catalog-rent", "100000"); app.change("catalog-area", "10000"); app.change("catalog-bedrooms", "6");
+  app.submit("catalog-form"); await tick();
+  assert.deepEqual(JSON.parse(app.calls.at(-1).options.body), directCriteria({ max_monthly_rent_usd: 100000, min_square_feet: 10000, bedrooms: 6, require_floor_plan_model: false }));
+});
+
+test("direct catalog rejects every changed canonical filter and unexpected fields", async (t) => {
+  let changed;
+  const app = boot(t, (url, options) => {
+    if (url !== "/api/v1/costar/search") return catalogRoute(url, options);
+    const result = catalogResponse(JSON.parse(options.body)); changed(result); return response(result);
+  });
+  await tick(); await openAsk(app); app.change("catalog-rent", "1000");
+  const mutations = [
+    (value) => { value.criteria.state = "CA"; }, (value) => { value.criteria.city = "Austin"; },
+    (value) => { value.criteria.bedrooms = 2; }, (value) => { value.criteria.max_monthly_rent_usd = 1800; },
+    (value) => { value.criteria.min_square_feet = 1; }, (value) => { value.criteria.limit = 4; },
+    (value) => { value.criteria.require_floor_plan_model = false; }, (value) => { value.criteria.include_specialized_housing = true; },
+    (value) => { value.criteria.source_path = "untrusted"; }, (value) => { delete value.criteria.city; },
+  ];
+  for (changed of mutations) {
+    app.submit("catalog-form"); await tick();
+    assert.match(app.get("catalog-error").textContent, /returned filters did not match/);
+    assert.equal(app.get("catalog-result").classList.contains("hidden"), true);
+    assert.equal(app.get("catalog-evidence").textContent, "");
+    assert.equal(app.document.querySelector(".inspect-floor-plan"), null);
+  }
+});
+
+test("direct catalog keeps full and unknown rent ranges explicit and allows selected inspection without AI", async (t) => {
+  const app = boot(t, (url, options) => {
+    if (url !== "/api/v1/costar/search") return catalogRoute(url, options);
+    const result = catalogResponse(JSON.parse(options.body));
+    result.results[0].asking_rent = { minimum: 900, maximum: 1300, currency: "USD", period: "month", basis: "per_unit" };
+    result.results[0].price_range_within_budget = false;
+    result.results[1].asking_rent = { minimum: 950, maximum: null, currency: "USD", period: "month", basis: "per_unit" };
+    result.results[1].price_range_within_budget = false;
+    return response(result);
+  });
+  await tick(); await openAsk(app); app.change("catalog-rent", "1000"); app.submit("catalog-form"); await tick();
+  const evidence = app.get("catalog-evidence");
+  assert.match(evidence.textContent, /\$900\.00 – \$1,300\.00 per month, per unit/);
+  assert.match(evidence.textContent, /\$950\.00 – upper bound unknown/);
+  assert.equal(Array.from(evidence.querySelectorAll("p")).filter((item) => item.textContent === "The full range is not confirmed within the applied catalog budget.").length, 2);
+  app.change("catalog-rent", "2000");
+  evidence.querySelector(".inspect-floor-plan").click(); await tick();
+  assert.equal(app.calls.at(-1).url, "/api/v1/costar/inspect");
+  assert.deepEqual(JSON.parse(app.calls.at(-1).options.body), { criteria: directCriteria({ max_monthly_rent_usd: 1000 }), property_id: 20, floor_plan_id: 30 });
+  assert.match(app.get("inspection-evidence").textContent, /100 square feet/);
+  assert.equal(app.calls.some((call) => call.url === "/api/v1/agent/answer"), false);
+});
+
+test("direct catalog request blocks other reads and cancellation rejects an eventual response", async (t) => {
+  let finish;
+  const app = boot(t, (url, options) => {
+    if (url === "/api/v1/costar/search") return new Promise((resolve) => { finish = resolve; });
+    return inspectionRoute(url, options);
+  });
+  await showShortlist(app);
+  const oldButton = app.document.querySelector(".inspect-floor-plan");
+  app.submit("catalog-form");
+  const request = app.calls.at(-1); const count = app.calls.length;
+  assert.equal(app.get("catalog-submit").disabled, true);
+  assert.equal(app.get("ask-submit").disabled, true);
+  assert.equal(app.get("ask-check").disabled, true);
+  assert.equal(app.get("catalog-rent").disabled, true);
+  assert.equal(app.get("ask-result").classList.contains("hidden"), true);
+  oldButton.dispatchEvent(new app.window.MouseEvent("click", { bubbles: true }));
+  app.submit("ask-form"); app.submit("catalog-form"); app.click("ask-check"); await tick();
+  assert.equal(app.calls.length, count);
+  app.click("catalog-cancel");
+  assert.equal(request.options.signal.aborted, true);
+  assert.equal(app.get("catalog-submit").disabled, false);
+  assert.match(app.get("catalog-state-message").textContent, /Stopped waiting/);
+  finish(response(catalogResponse())); await tick();
+  assert.equal(app.get("catalog-result").classList.contains("hidden"), true);
+  assert.equal(app.get("catalog-evidence").textContent, "");
+  assert.equal(app.calls.length, count);
+});
+
+for (const action of ["refresh", "lock", "token", "cancel"]) {
+  test("late catalog JSON cannot restore records after " + action, async (t) => {
+    let finish;
+    const app = boot(t, (url, options) => url === "/api/v1/costar/search" ? { ok: true, status: 200, json: () => new Promise((resolve) => { finish = resolve; }) } : catalogRoute(url, options));
+    await tick(); await openAsk(app); app.submit("catalog-form"); await tick();
+    const request = app.calls.at(-1);
+    if (action === "refresh") app.click("refresh-button");
+    else if (action === "cancel") app.click("catalog-cancel");
+    else {
+      app.click("lock-button");
+      if (action === "token") { app.get("app-token").value = "replacement"; app.submit("access-form"); }
+    }
+    await tick(); assert.equal(request.options.signal.aborted, true);
+    finish(catalogResponse()); await tick();
+    assert.equal(app.get("catalog-result").classList.contains("hidden"), true);
+    assert.equal(app.get("catalog-evidence").textContent, "");
+    assert.equal(app.get("inspection-evidence").textContent, "");
+  });
+}
+
+test("a new AI question clears direct results and invalidates retained selection controls", async (t) => {
+  const app = boot(t, (url, options) => url === "/api/v1/agent/status" ? response(agentStatus({ costar_enabled: true, matterport_enabled: true })) : catalogRoute(url, options));
+  await showCatalog(app);
+  const button = app.get("catalog-evidence").querySelector(".inspect-floor-plan");
+  button.click(); await tick();
+  assert.notEqual(app.get("inspection-evidence").textContent, "");
+  typeQuestion(app); app.submit("ask-form"); await tick();
+  assert.equal(app.get("catalog-result").classList.contains("hidden"), true);
+  assert.equal(app.get("catalog-evidence").textContent, "");
+  assert.equal(app.get("inspection-evidence").textContent, "");
+  const count = app.calls.length;
+  button.dispatchEvent(new app.window.MouseEvent("click", { bubbles: true })); await tick();
+  assert.equal(app.calls.length, count);
+});
+
+test("catalog errors and malformed responses are sanitized without retry or AI fallback", async (t) => {
+  let reply;
+  let bodyReads = 0;
+  const app = boot(t, (url, options) => url === "/api/v1/costar/search" ? reply() : catalogRoute(url, options));
+  await tick(); await openAsk(app);
+  const replies = [
+    ...[403, 422, 429, 503, 504, 500].map((status) => () => ({ ok: false, status, json: async () => { bodyReads += 1; throw new Error("private provider token"); } })),
+    () => ({ ok: true, status: 200, json: async () => { throw new Error("private provider token"); } }),
+    () => { throw new Error("private provider token"); },
+    () => response({ status: "unavailable", reason: "private provider token" }),
+    () => response({ ...catalogResponse(), source_hash: "invalid" }),
+    () => response({ ...catalogResponse(), results: [null] }),
+  ];
+  for (reply of replies) {
+    const count = app.calls.length;
+    app.submit("catalog-form"); await tick();
+    assert.equal(app.calls.length, count + 1);
+    assert.notEqual(app.get("catalog-error").textContent, "");
+    assert.equal(app.get("catalog-evidence").textContent, "");
+    assert.equal(app.get("catalog-submit").disabled, false);
+    assert.doesNotMatch(app.document.documentElement.outerHTML, /private provider token/);
+  }
+  assert.equal(bodyReads, 0);
+  assert.equal(app.calls.some((call) => call.url === "/api/v1/agent/answer"), false);
+});
+
+test("catalog authentication failure locks and clears search inputs and all prior evidence", async (t) => {
+  const app = boot(t, (url, options) => url === "/api/v1/costar/search" ? response({}, 401) : inspectionRoute(url, options));
+  await showShortlist(app); app.change("catalog-city", "Private draft city"); app.change("catalog-rent", "1000");
+  app.submit("catalog-form"); await tick();
+  assert.equal(app.get("access-panel").classList.contains("hidden"), false);
+  assert.match(app.get("access-error").textContent, /app token was not accepted/);
+  assert.equal(app.get("ask-answer").textContent, "");
+  assert.equal(app.get("catalog-evidence").textContent, "");
+  assert.equal(app.get("catalog-city").value, "");
+  assert.equal(app.get("catalog-rent").value, "1800");
+  assert.equal(app.get("catalog-submit").disabled, true);
+});
+
+test("catalog deadline releases controls and rejects the late result without retry", async (t) => {
+  let finish;
+  const app = boot(t, (url, options) => url === "/api/v1/costar/search" ? new Promise((resolve) => { finish = resolve; }) : catalogRoute(url, options));
+  await tick(); await openAsk(app);
+  let deadline;
+  app.window.setTimeout = (callback, milliseconds) => { if (milliseconds === 60000) deadline = callback; return 1; };
+  app.submit("catalog-form");
+  const request = app.calls.at(-1); const count = app.calls.length;
+  assert.equal(typeof deadline, "function"); deadline();
+  assert.equal(request.options.signal.aborted, true);
+  assert.equal(app.get("catalog-submit").disabled, false);
+  assert.match(app.get("catalog-error").textContent, /timed out/);
+  finish(response(catalogResponse())); await tick();
+  assert.equal(app.get("catalog-evidence").textContent, "");
+  assert.equal(app.calls.length, count);
+});
