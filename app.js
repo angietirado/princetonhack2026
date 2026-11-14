@@ -1,982 +1,322 @@
 (() => {
-  "use strict";
+  'use strict';
   const $ = (id) => document.getElementById(id);
-  const money = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
-  const shortMoney = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(cents / 100);
-  const label = (value) => String(value).replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-  const dateLabel = (value) => value ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(value.slice(0, 10) + "T00:00:00Z")) : "No activity";
-  const colors = ["#8e74e8", "#f2a65a", "#6ca4e5", "#79bfa8", "#d898ad", "#bcc8c0"];
-  const pageSize = 25;
-  let token = "";
-  let data = null;
-  let statusFilter = "all";
-  let page = 0;
-  let range = {};
-  let appliedPreset = "all";
-  let sequence = 0;
-  let controller = null;
-  let toastTimer = null;
-  let askSequence = 0;
-  let askController = null;
-  let askStatus = null;
-  let askStatusLoading = false;
-  let askPending = false;
-  let askTimer = null;
-  let dashboardLoading = false;
-  let answerContext = 0;
-  let catalogSequence = 0;
-  let catalogController = null;
-  let catalogTimer = null;
-  let catalogPending = false;
-  let comparisonSequence = 0;
-  let comparisonController = null;
-  let comparisonTimer = null;
-  let comparisonPending = false;
+  const state = { data: null, token: '', view: 'overview', sequence: 0, controller: null, askSequence: 0, askController: null, draft: null, comparisonSequence: 0, comparisonController: null, pilotSequence: 0, pilotController: null, pilotResult: null };
+  const colors = { champions: '#315b43', regulars: '#78966b', promising: '#b7c89e', slipping: '#bb8059', new: '#ddd9bd' };
+  const labels = { champions: 'Champions', regulars: 'Regulars', promising: 'Promising', slipping: 'Slipping away', new: 'New faces' };
+  const money = (value) => Number.isFinite(value) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value / 100) : '—';
+  const integer = (value) => Number.isFinite(value) ? new Intl.NumberFormat('en-US').format(value) : '—';
+  const percent = (value) => Number.isFinite(value) ? `${Math.round(value * 100)}%` : '—';
+  const shortDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? new Date(`${value}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : value || '—';
+  const titleCase = (value) => String(value).replace(/_/g, ' ').replace(/^./, (letter) => letter.toUpperCase());
+  const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
+  const setText = (id, text) => { $(id).textContent = text; };
+  const status = (text, error = false) => { setText('status', text); $('status').classList.toggle('error', error); };
+  const authHeaders = () => state.token ? { Authorization: `Bearer ${state.token}` } : {};
+  const periodQuery = () => { const query = new URLSearchParams(); if ($('start-date').value) query.set('start', $('start-date').value); if ($('end-date').value) query.set('end', $('end-date').value); return query.toString(); };
+  const options = (extra = {}) => ({ cache: 'no-store', redirect: 'error', credentials: 'same-origin', ...extra, headers: { ...authHeaders(), ...(extra.headers || {}) } });
+  const resetAnswer = () => { state.askSequence++; state.askController?.abort(); $('ask-result').hidden = true; setText('answer', ''); $('evidence').replaceChildren(); $('answer-limitations').replaceChildren(); setText('answer-meta', ''); $('answer-activity').replaceChildren(); $('answer-activity-details').hidden = true; $('answer-activity-details').open = false; $('ask-result').classList.remove('incomplete'); setText('ask-status', ''); $('ask-submit').disabled = false; };
+  const clearData = () => { resetAnalysis(); state.data = null; $('dashboard-content').hidden = true; resetAnswer(); $('draft-card').hidden = true; state.draft = null; $('draft-hypothesis').value = ''; $('draft-measure').value = ''; setText('draft-description', ''); };
+  const unlockRequired = () => { state.token = ''; $('lock-button').hidden = true; clearData(); $('access-panel').hidden = false; status('This workspace requires an owner access token.'); $('access-token').focus(); };
+  const fetchJson = async (url, extra = {}) => { const response = await fetch(url, options(extra)); if (response.status === 401) { const error = new Error('Owner access token required.'); error.auth = true; throw error; } if (!response.ok) { let detail = ''; try { const body = await response.json(); if (typeof body.detail === 'string') detail = body.detail; } catch {} throw new Error(detail || `Request failed (${response.status}). Please try again.`); } return response.json(); };
 
-  function node(tag, text, className) {
-    const element = document.createElement(tag);
-    if (text !== undefined) element.textContent = text;
-    if (className) element.className = className;
-    return element;
+  function switchView(view) {
+    const views = { overview: ['Overview', 'YOUR CUSTOMER STORY', 'Good business starts\nwith familiar faces.', 'See who returns, what matters, and where to put your energy.'], customers: ['Customers', 'KNOW YOUR PEOPLE', 'From first visits\nto familiar faces.', 'Explore the purchase patterns behind your customer relationships.'], experiments: ['Experiments', 'A THOUGHTFUL NEXT STEP', 'Turn a little insight\ninto a little progress.', 'Choose one idea, define success, and learn before doing more.'] };
+    if (!views[view]) return;
+    if (state.view !== view) resetAnalysis();
+    state.view = view;
+    const [label, eyebrow, title, lede] = views[view];
+    setText('view-label', label); setText('page-eyebrow', eyebrow); setText('page-lede', lede);
+    $('page-title').replaceChildren(); title.split('\n').forEach((line, i) => { if (i) $('page-title').append(document.createElement('br')); $('page-title').append(document.createTextNode(line)); });
+    document.querySelectorAll('[data-view]').forEach((button) => { const active = button.dataset.view === view; button.classList.toggle('active', active); if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
+    ['overview', 'customers', 'experiments'].forEach((name) => { $(`${name}-panel`).hidden = name !== view; });
   }
-  function message(text) {
-    $("toast").textContent = text;
-    $("toast").classList.add("show");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => $("toast").classList.remove("show"), 2400);
+
+  function renderChart(rows) {
+    const host = $('revenue-chart'); host.replaceChildren();
+    const points = rows.filter((row) => Number.isFinite(row.net_revenue_cents));
+    if (!points.length) { host.append(element('div', 'empty-state', 'No observed revenue in this period.')); return; }
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = (tag, attrs = {}) => { const node = document.createElementNS(ns, tag); Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value))); return node; };
+    const width = 650, height = 200, left = 46, right = 10, top = 12, bottom = 13;
+    const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+    const min = Math.min(0, ...points.map((p) => p.net_revenue_cents));
+    const max = Math.max(100, ...points.map((p) => p.net_revenue_cents));
+    const x = (i) => left + (points.length === 1 ? (width - left - right) / 2 : i * (width - left - right) / (points.length - 1));
+    const y = (value) => top + (max - value) / (max - min) * (height - top - bottom);
+    for (let i = 0; i <= 4; i++) { const value = min + (max - min) * i / 4; const lineY = y(value); chart.append(svg('line', { x1: left, x2: width - right, y1: lineY, y2: lineY, stroke: '#e8ebdf', 'stroke-dasharray': '3 5', 'stroke-width': '.8' })); const label = svg('text', { x: left - 9, y: lineY + 3, 'text-anchor': 'end', fill: '#596950', 'font-size': '9', 'font-family': 'system-ui' }); label.textContent = `$${Math.round(value / 100)}`; chart.append(label); }
+    const coords = points.map((point, i) => `${x(i)},${y(point.net_revenue_cents)}`);
+    const defs = svg('defs'); const gradient = svg('linearGradient', { id: 'revenue-fill', x1: 0, y1: 0, x2: 0, y2: 1 }); gradient.append(svg('stop', { offset: '0%', 'stop-color': '#b0c59a', 'stop-opacity': '.35' }), svg('stop', { offset: '100%', 'stop-color': '#c6d6b6', 'stop-opacity': '.02' })); defs.append(gradient); chart.append(defs);
+    if (points.length > 1) chart.append(svg('path', { d: `M ${x(0)},${y(0)} L ${coords.join(' L ')} L ${x(points.length - 1)},${y(0)} Z`, fill: 'url(#revenue-fill)' }));
+    chart.append(svg('path', { d: `M ${coords.join(' L ')}`, fill: 'none', stroke: '#426c4e', 'stroke-width': '2.4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' }));
+    points.forEach((point, i) => { const dot = svg('circle', { cx: x(i), cy: y(point.net_revenue_cents), r: points.length <= 8 ? 3 : 2, fill: '#426c4e' }); const title = svg('title'); title.textContent = `${point.date}: ${money(point.net_revenue_cents)} net revenue, ${integer(point.orders)} orders`; dot.append(title); chart.append(dot); });
+    host.append(chart); host.setAttribute('aria-label', `Daily net revenue from ${points[0].date} through ${points.at(-1).date}. Total ${money(points.reduce((sum, p) => sum + p.net_revenue_cents, 0))}.`);
+    setText('chart-start', shortDate(points[0].date)); setText('chart-end', shortDate(points.at(-1).date));
   }
-  function showView(view) {
-    const destination = $(view + "-view");
-    if (!destination?.classList.contains("page")) return;
-    document.querySelectorAll(".page").forEach((item) => item.classList.toggle("hidden", item.id !== view + "-view"));
-    document.querySelector(".range-toolbar").classList.toggle("hidden", view === "ask" || view === "settings");
-    document.querySelectorAll(".nav-item").forEach((item) => {
-      const active = item.dataset.view === view;
-      item.classList.toggle("active", active);
-      if (active) item.setAttribute("aria-current", "page");
-      else item.removeAttribute("aria-current");
+
+  function renderSegments(segments) {
+    $('segments').replaceChildren(); $('segment-stack').replaceChildren();
+    const previous = $('segment-filter').value;
+    $('segment-filter').replaceChildren(element('option', '', 'All customer groups')); $('segment-filter').firstChild.value = 'all';
+    const total = segments.reduce((sum, segment) => sum + segment.customers, 0);
+    segments.forEach((segment) => {
+      const color = colors[segment.id] || '#a7b598';
+      const bar = element('span'); bar.style.background = color; bar.style.flex = String(segment.customers); if (segment.customers > 0) $('segment-stack').append(bar);
+      const button = element('button', 'segment-row'); button.type = 'button'; button.title = segment.description; button.dataset.segment = segment.id;
+      const dot = element('span', 'segment-dot'); dot.style.background = color;
+      button.append(dot, element('span', 'segment-label', segment.label), element('span', 'segment-value', integer(segment.customers)), element('span', 'segment-share', total ? percent(segment.customers / total) : '—'));
+      button.addEventListener('click', () => { $('segment-filter').value = segment.id; $('customer-search').value = ''; renderCustomers(); switchView('customers'); });
+      $('segments').append(button);
+      const option = element('option', '', segment.label); option.value = segment.id; $('segment-filter').append(option);
     });
-    const active = document.querySelector('.nav-item[data-view="' + view + '"]');
-    $("page-title").textContent = active ? active.getAttribute("aria-label") : "Overview";
-    if (view === "overview" && data && !dashboardLoading) renderMonths();
-    const heading = destination.querySelector("h1");
-    if (heading && data && !dashboardLoading && !$("dashboard-data").classList.contains("hidden")) {
-      heading.setAttribute("tabindex", "-1");
-      heading.focus({ preventScroll: true });
-    }
-    window.scrollTo({ top: 0, behavior: "auto" });
-    if (view === "ask") void loadAskStatus();
+    if ([...$('segment-filter').options].some((option) => option.value === previous)) $('segment-filter').value = previous;
   }
-  document.querySelectorAll("[data-view], [data-view-link]").forEach((button) => {
-    button.addEventListener("click", () => showView(button.dataset.view || button.dataset.viewLink));
-  });
-  function clearData() {
-    data = null;
-    resetAsk();
-    resetComparison(true);
-    $("dashboard-data").classList.add("hidden");
-    for (const id of ["balance-value", "balance-foot", "spend-value", "spend-foot", "credit-value", "credit-foot", "gross-total", "refund-note", "largest-category-title", "largest-category-copy", "largest-category-share", "refund-insight", "pending-insight", "uncategorized-insight", "report-total", "report-period", "connection-source", "connection-customer", "connection-time", "transaction-count", "page-count", "period-caption", "overview-subheading"]) $(id).textContent = "";
-    for (const id of ["category-legend", "monthly-chart", "recent-activity", "coverage-details", "transaction-rows", "recurring-list", "report-categories", "accounts-list"]) $(id).replaceChildren();
-    $("category-donut").style.background = "#e4e9e5";
-    $("category-donut").setAttribute("aria-label", "No expense data loaded");
-    $("transaction-badge").textContent = "—";
-    $("transaction-search").value = "";
-  }
-  function lock() {
-    sequence += 1;
-    controller?.abort();
-    token = "";
-    dashboardLoading = false;
-    clearData();
-    $("app-token").value = "";
-    $("access-error").textContent = "";
-    $("access-panel").classList.remove("hidden");
-    $("status-banner").classList.add("hidden");
-    $("lock-button").classList.add("hidden");
-    $("source-badge").textContent = "Locked";
-    $("sync-title").textContent = "Dashboard locked";
-    $("sync-account-name").textContent = "Enter your app token";
-    $("sync-dot").classList.add("inactive");
-    $("refresh-button").disabled = false;
-    $("app-token").focus();
-  }
-  $("lock-button").addEventListener("click", lock);
 
-  async function refresh() {
-    const requestId = ++sequence;
-    dashboardLoading = true;
-    resetAsk();
-    resetComparison();
-    controller?.abort();
-    controller = new AbortController();
-    $("refresh-button").disabled = true;
-    $("unlock-button").disabled = true;
-    $("dashboard-data").classList.add("hidden");
-    $("status-banner").textContent = "Loading your spending…";
-    $("status-banner").className = "status-banner";
-    $("access-error").textContent = "";
-    $("sync-title").textContent = "Updating";
-    $("sync-dot").classList.add("inactive");
-    try {
-      const query = new URLSearchParams(range);
-      const response = await fetch("/api/v1/dashboard" + (query.size ? "?" + query : ""), {
-        headers: token ? { Authorization: "Bearer " + token } : {},
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (requestId !== sequence) return;
-      if (response.status === 401) {
-        const rejected = Boolean(token);
-        lock();
-        if (rejected) $("access-error").textContent = "That access token was not accepted. Try again.";
-        return;
-      }
-      if (!response.ok) throw new Error("The data connection is unavailable. Check the backend and try Refresh.");
-      const payload = await response.json();
-      if (requestId !== sequence) return;
-      if (!payload.summary || !Number.isSafeInteger(payload.summary.net_spending_cents) ||
-          !["accounts", "transactions", "monthly_spending", "expense_categories", "recurring"].every((key) => Array.isArray(payload[key]))) {
-        throw new Error("The backend returned an unexpected response. Check that both services are up to date.");
-      }
-      data = payload;
-      updateAskControls();
-      page = 0;
-      $("dashboard-data").classList.remove("hidden");
-      render();
-      $("access-panel").classList.add("hidden");
-      $("dashboard-data").classList.remove("hidden");
-      $("status-banner").classList.add("hidden");
-      $("lock-button").classList.toggle("hidden", !token);
-    } catch (error) {
-      if (requestId !== sequence || error.name === "AbortError") return;
-      clearData();
-      $("status-banner").textContent = error instanceof Error && error.message.startsWith("The ") ? error.message : "Unable to reach the backend. Try Refresh when the connection is available.";
-      $("status-banner").className = "status-banner error";
-      $("sync-title").textContent = "Connection unavailable";
-      $("sync-account-name").textContent = "Refresh to try again";
-      $("source-badge").textContent = "Unavailable";
-    } finally {
-      if (requestId === sequence) {
-        dashboardLoading = false;
-        updateAskControls();
-        $("refresh-button").disabled = false;
-        $("unlock-button").disabled = false;
-      }
-      // lock() increments the sequence and needs a usable form after a 401.
-      if (!data && $("access-panel").classList.contains("hidden") === false) $("unlock-button").disabled = false;
-    }
+  function renderCustomers() {
+    $('customers').replaceChildren();
+    if (!state.data) return;
+    const search = $('customer-search').value.trim().toLowerCase(), segment = $('segment-filter').value;
+    const rows = state.data.customers.filter((customer) => (segment === 'all' || customer.segment === segment) && `${customer.id} ${customer.label}`.toLowerCase().includes(search));
+    rows.forEach((customer) => {
+      const row = element('tr'); row.append(element('td', '', customer.label || customer.id));
+      const group = element('td'); const badge = element('span', 'segment-badge'); const dot = element('span', 'segment-dot'); dot.style.background = colors[customer.segment] || '#a7b598'; badge.append(dot, document.createTextNode(state.data.segments.find((s) => s.id === customer.segment)?.label || labels[customer.segment] || customer.segment)); group.append(badge); row.append(group);
+      row.append(element('td', '', integer(customer.orders)), element('td', '', money(customer.revenue_cents)), element('td', '', shortDate(customer.last_seen)), element('td', '', integer(customer.days_since_last)));
+      $('customers').append(row);
+    });
+    setText('customer-count', `${integer(rows.length)} of ${integer(state.data.customers.length)} customers`); $('customer-empty').hidden = rows.length > 0;
   }
-  $("refresh-button").addEventListener("click", () => void refresh());
-  $("access-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const entered = $("app-token").value.trim();
-    if (!entered) return;
-    token = entered;
-    $("app-token").value = "";
-    void refresh();
-  });
 
-  function clearAskAnswer() {
-    answerContext += 1;
-    clearCatalog();
-    $("ask-result").classList.add("hidden");
-    for (const id of ["ask-outcome", "ask-asked-question", "ask-answer", "ask-usage", "ask-source", "ask-revision"]) $(id).textContent = "";
-    $("ask-clarification").classList.add("hidden");
-    $("ask-question").setAttribute("aria-describedby", "ask-guidance ask-counter");
-    $("ask-technical-details").open = false;
-    $("ask-caveats").replaceChildren();
-    $("ask-evidence").replaceChildren();
-    $("ask-activity").replaceChildren();
-    $("ask-needed-inputs").replaceChildren();
+  function renderCohorts(cohorts) {
+    $('cohorts').replaceChildren();
+    if (!cohorts.length) { const row = element('tr'); const cell = element('td', 'empty-state', 'No customer cohorts in the observed history.'); cell.colSpan = 6; row.append(cell); $('cohorts').append(row); return; }
+    cohorts.forEach((cohort) => {
+      const row = element('tr'); let month = cohort.month; if (/^\d{4}-\d{2}$/.test(month)) month = new Date(`${month}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+      row.append(element('td', '', month), element('td', '', integer(cohort.customers)));
+      for (let i = 0; i < 4; i++) { const value = cohort.retention[i]; const cell = element('td'); const pill = element('span', 'retention-cell', percent(value)); if (Number.isFinite(value)) { const intensity = Math.min(1, Math.max(0, value)); pill.style.background = `rgba(100, 139, 72, ${0.07 + intensity * 0.3})`; pill.style.color = '#426039'; pill.title = `${percent(value)} observed active in cohort month ${i}`; } else { pill.style.background = '#f4f5ee'; pill.style.color = '#596950'; pill.title = 'Not yet observable'; } cell.append(pill); row.append(cell); }
+      $('cohorts').append(row);
+    });
   }
-  function updateAskControls() {
-    updateComparisonControls();
-    const idle = Boolean(data && !dashboardLoading && !askStatusLoading && !askPending && !catalogPending);
-    const ready = idle && askStatus?.enabled;
-    $("ask-question").disabled = !ready;
-    $("ask-submit").disabled = !ready || !$("ask-question").value.trim();
-    $("ask-submit").textContent = askPending ? "Working…" : "Ask →";
-    $("ask-cancel").classList.toggle("hidden", !askPending);
-    $("ask-cancel").disabled = !askPending;
-    $("ask-edit-question").disabled = !ready;
-    $("ask-check").disabled = !idle;
-    $("ask-example-spending").disabled = !ready;
-    $("ask-example-housing").disabled = !ready;
-    $("ask-example-housing").classList.toggle("hidden", askStatus?.costar_enabled !== true);
-    $("ask-counter").textContent = $("ask-question").value.length + " / 2000 characters";
-    $("ask-form").setAttribute("aria-busy", String(askPending));
-    const catalogEnabled = askStatus?.costar_enabled === true;
-    const catalogReady = idle && catalogEnabled;
-    $("catalog-controls").classList.toggle("hidden", !catalogEnabled);
-    for (const id of ["catalog-state", "catalog-city", "catalog-bedrooms", "catalog-rent", "catalog-area", "catalog-submit"]) $(id).disabled = !catalogReady;
-    $("catalog-submit").textContent = catalogPending ? "Searching…" : "Search catalog";
-    $("catalog-cancel").classList.toggle("hidden", !catalogPending);
-    $("catalog-form").setAttribute("aria-busy", String(catalogPending));
-    $("catalog-availability").textContent = askStatus?.costar_enabled === true ? "Direct catalog search is available, including when AI is disabled." : askStatus ? "The apartment catalog is disabled for this workspace." : "Check availability above to search.";
-  }
-  function resetAsk() {
-    askSequence += 1;
-    askController?.abort();
-    clearTimeout(askTimer);
-    askController = null;
-    askStatus = null;
-    askStatusLoading = false;
-    askPending = false;
-    $("catalog-form").reset();
-    $("ask-question").value = "";
-    $("ask-provider").textContent = "Check availability to start.";
-    $("ask-state").textContent = "";
-    $("ask-error").textContent = "";
-    clearAskAnswer();
-    updateAskControls();
-  }
-  function askAuthHeaders(json = false) {
-    return { ...(token ? { Authorization: "Bearer " + token } : {}), ...(json ? { "Content-Type": "application/json" } : {}) };
-  }
-  function startAskDeadline(requestId, milliseconds, checkingStatus) {
-    clearTimeout(askTimer);
-    askTimer = setTimeout(() => {
-      if (requestId !== askSequence) return;
-      askSequence += 1;
-      askController?.abort();
-      askStatusLoading = false;
-      askPending = false;
-      $("ask-state").textContent = "";
-      if (checkingStatus) $("ask-provider").textContent = "AI availability could not be checked.";
-      $("ask-error").textContent = checkingStatus ? "The availability check timed out. Try checking again." : "The answer request timed out. Check the connection before submitting again.";
-      updateAskControls();
-    }, milliseconds);
-  }
-  async function loadAskStatus(force = false) {
-    if (!data || dashboardLoading || askPending || catalogPending || askStatusLoading || (askStatus && !force)) return;
-    const requestId = ++askSequence;
-    askController?.abort();
-    askController = new AbortController();
-    askStatusLoading = true;
-    askStatus = null;
-    $("ask-provider").textContent = "Checking AI availability…";
-    $("ask-error").textContent = "";
-    updateAskControls();
-    startAskDeadline(requestId, 15000, true);
-    try {
-      const response = await fetch("/api/v1/agent/status", { headers: askAuthHeaders(), cache: "no-store", signal: askController.signal });
-      if (requestId !== askSequence) return;
-      if (response.status === 401) { lock(); $("access-error").textContent = "Unlock with a valid app token to use AI."; return; }
-      if (!response.ok) throw new Error("status unavailable");
-      const status = await response.json();
-      if (requestId !== askSequence) return;
-      if (!status || typeof status.enabled !== "boolean" || typeof status.provider !== "string" || typeof status.model !== "string" || status.provider.length > 160 || status.model.length > 160) throw new Error("invalid status");
-      askStatus = status;
-      $("ask-provider").textContent = status.enabled ? "AI questions are enabled · Read-only tools" : "AI is disabled for this workspace. Your spending dashboard remains available.";
-    } catch (error) {
-      if (requestId !== askSequence || error.name === "AbortError") return;
-      $("ask-provider").textContent = "AI availability could not be checked.";
-      $("ask-error").textContent = "Check the backend connection, then check availability again.";
-    } finally {
-      if (requestId === askSequence) { clearTimeout(askTimer); askStatusLoading = false; updateAskControls(); }
-    }
-  }
-  $("ask-check").addEventListener("click", () => void loadAskStatus(true));
-  $("ask-question").addEventListener("input", () => { $("ask-error").textContent = ""; updateAskControls(); });
-  $("ask-edit-question").addEventListener("click", () => {
-    if ($("ask-edit-question").disabled || $("ask-result").classList.contains("hidden")) return;
-    $("ask-question").value = $("ask-asked-question").textContent;
-    $("ask-error").textContent = "";
-    $("ask-state").textContent = "Add the requested details to your original question, then submit it. Each question starts fresh.";
-    updateAskControls();
-    $("ask-question").focus();
-  });
-  $("ask-example-spending").addEventListener("click", () => {
-    if (!askStatus?.enabled || askPending || catalogPending) return;
-    const start = data?.summary.start || "[start date]";
-    const end = data?.summary.end || "[end date]";
-    $("ask-question").value = "Summarize my observed spending from " + start + " through " + end + " in UTC. Include refunds, exclusions, and missing-history caveats.";
-    updateAskControls();
-    $("ask-question").focus();
-  });
-  $("ask-example-housing").addEventListener("click", () => {
-    if (!askStatus?.enabled || !askStatus.costar_enabled || askPending || catalogPending) return;
-    $("ask-question").value = "Find up to 3 one-bedroom apartments in TX under $1,800 monthly asking rent. Show each full rent range and recorded availability limitations.";
-    updateAskControls();
-    $("ask-question").focus();
-  });
-  const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-  function canonicalCriteria(criteria) {
-    const fields = ["state", "city", "bedrooms", "max_monthly_rent_usd", "min_square_feet", "limit", "include_specialized_housing"];
-    if (!object(criteria) || Object.keys(criteria).length !== fields.length || !fields.every((key) => Object.hasOwn(criteria, key))) return false;
-    return ["TX", "CA"].includes(criteria.state) &&
-      (criteria.city === null || (typeof criteria.city === "string" && criteria.city.length > 0 && criteria.city.length <= 80 && criteria.city === criteria.city.trim() && !/[\u0000-\u001f]/.test(criteria.city))) &&
-      [["bedrooms", 0, 6], ["max_monthly_rent_usd", 1, 100000], ["min_square_feet", 0, 10000], ["limit", 1, 20]].every(([key, low, high]) => Number.isSafeInteger(criteria[key]) && criteria[key] >= low && criteria[key] <= high) &&
-      typeof criteria.include_specialized_housing === "boolean";
-  }
-  function clearCatalog() {
-    catalogSequence += 1;
-    catalogController?.abort();
-    clearTimeout(catalogTimer);
-    catalogController = null;
-    catalogPending = false;
-    $("catalog-result").classList.add("hidden");
-    for (const id of ["catalog-state-message", "catalog-error", "catalog-source"]) $(id).textContent = "";
-    $("catalog-evidence").replaceChildren();
-  }
-  function readCatalogCriteria() {
-    const integer = (id, optional = false) => {
-      const text = $(id).value.trim();
-      if (optional && !text) return 0;
-      return /^\d+$/.test(text) ? Number(text) : NaN;
-    };
-    return {
-      state: $("catalog-state").value, city: $("catalog-city").value.trim() || null,
-      bedrooms: integer("catalog-bedrooms"), max_monthly_rent_usd: integer("catalog-rent"),
-      min_square_feet: integer("catalog-area", true), limit: 3,
-      include_specialized_housing: false,
-    };
-  }
-  function sameCatalogCriteria(actual, expected) {
-    return canonicalCriteria(actual) && Object.keys(expected).every((key) => actual[key] === expected[key]);
-  }
-  function validCatalogResult(result) {
-    return object(result) && result.status === "ok" && result.source_kind === "costar_local_snapshot" &&
-      typeof result.source_hash === "string" && /^[a-f0-9]{64}$/.test(result.source_hash) &&
-      Array.isArray(result.results) && result.results.length <= 3 && result.results.every(object) &&
-      Array.isArray(result.limitations) && result.limitations.every((item) => typeof item === "string") &&
-      JSON.stringify(result).length <= 96000;
-  }
-  function restoreCancelledFocus(target, context) {
-    if (context === answerContext && data && !dashboardLoading && !$("ask-view").classList.contains("hidden") &&
-        !$("dashboard-data").classList.contains("hidden") && target?.isConnected && !target.disabled && !target.closest(".hidden")) target.focus();
-  }
-  $("ask-cancel").addEventListener("click", () => {
-    if (!askPending) return;
-    const context = answerContext;
-    askSequence += 1;
-    askController?.abort();
-    clearTimeout(askTimer);
-    askController = null;
-    askPending = false;
-    $("ask-state").textContent = "Stopped waiting for the answer. The server may still finish this request; no result will be accepted and no retry was sent.";
-    $("ask-error").textContent = "";
-    updateAskControls();
-    restoreCancelledFocus($("ask-question"), context);
-  });
-  $("catalog-cancel").addEventListener("click", () => {
-    if (!catalogPending) return;
-    const context = answerContext;
-    clearCatalog();
-    $("catalog-state-message").textContent = "Stopped waiting for the catalog search. No result was accepted.";
-    updateAskControls();
-    restoreCancelledFocus($("catalog-submit"), context);
-  });
-  $("catalog-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!data || dashboardLoading || askStatus?.costar_enabled !== true || askStatusLoading || askPending || catalogPending) return;
-    const criteria = readCatalogCriteria();
-    if (!canonicalCriteria(criteria)) {
-      $("catalog-error").textContent = "Use TX or CA, a city of at most 80 characters without control characters, 0–6 bedrooms, a whole-dollar starting rent from 1 to 100,000, and an optional whole-number area from 0 to 10,000 square feet.";
-      return;
-    }
-    Object.freeze(criteria);
-    clearAskAnswer();
-    const requestId = catalogSequence;
-    const context = answerContext;
-    let completionMessage = "";
-    catalogController = new AbortController();
-    catalogPending = true;
-    $("ask-error").textContent = "";
-    $("ask-state").textContent = "";
-    $("catalog-state-message").textContent = "Searching the local catalog with your submitted filters…";
-    updateAskControls();
-    catalogTimer = setTimeout(() => {
-      if (requestId !== catalogSequence || context !== answerContext) return;
-      catalogSequence += 1;
-      catalogController?.abort();
-      catalogPending = false;
-      $("catalog-state-message").textContent = "";
-      $("catalog-error").textContent = "The catalog search timed out. No result was accepted; you may try again.";
-      updateAskControls();
-    }, 60000);
-    try {
-      const response = await fetch("/api/v1/costar/search", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify(criteria), cache: "no-store", redirect: "error", signal: catalogController.signal });
-      if (requestId !== catalogSequence || context !== answerContext) return;
-      if (response.status === 401) { lock(); $("access-error").textContent = "Your app token was not accepted. Unlock again to search the catalog."; return; }
-      if (!response.ok) {
-        $("catalog-error").textContent = ({ 403: "The catalog search was not authorized.", 422: "The catalog rejected these filters. Check the fields before submitting again.", 429: "Another catalog search is running. Wait briefly before trying again.", 503: "The catalog is disabled or unavailable. Check availability before trying again.", 504: "The catalog search reached its time limit. No result was accepted." })[response.status] || "The catalog search could not be completed. No results were accepted.";
-        return;
-      }
-      const result = await response.json();
-      if (requestId !== catalogSequence || context !== answerContext) return;
-      if (object(result) && result.status === "unavailable") { $("catalog-error").textContent = "The catalog is unavailable. No results were accepted."; return; }
-      if (!object(result) || !sameCatalogCriteria(result.criteria, criteria)) {
-        $("catalog-error").textContent = "The returned filters did not match your submitted search. No results were accepted; check availability before searching again.";
-        return;
-      }
-      if (!validCatalogResult(result)) throw new Error("invalid catalog response");
-      $("catalog-source").textContent = "Catalog revision: " + result.source_hash;
-      $("catalog-evidence").append(renderToolEvidence({ tool: "costar_search", arguments: criteria, result }, true));
-      $("catalog-result").classList.remove("hidden");
-      completionMessage = result.results.length ? "Catalog search complete. " + result.results.length + " recorded matches returned. Review the direct results and rent ranges below." : "Catalog search complete. No recorded matches were returned for these filters; this is not a whole-market result.";
-    } catch (error) {
-      if (requestId !== catalogSequence || context !== answerContext || error.name === "AbortError") return;
-      $("catalog-error").textContent = "A valid catalog response could not be received. No results were accepted.";
-    } finally {
-      if (requestId === catalogSequence && context === answerContext) {
-        clearTimeout(catalogTimer);
-        catalogPending = false;
-        $("catalog-state-message").textContent = completionMessage;
-        updateAskControls();
-      }
-    }
-  });
-  function validAskAnswer(value) {
-    return object(value) && ["answered", "clarification", "limited", "unavailable"].includes(value.status) &&
-      typeof value.answer === "string" && value.answer.length <= 8000 &&
-      ["provider", "model", "source", "source_hash"].every((key) => typeof value[key] === "string" && value[key].length <= 256) &&
-      ["model_calls", "tool_calls"].every((key) => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 32) &&
-      Array.isArray(value.caveats) && value.caveats.length <= 64 && value.caveats.every((item) => typeof item === "string" && item.length <= 2000) &&
-      Array.isArray(value.evidence) && value.evidence.length <= 12 && value.evidence.every((item) => object(item) && typeof item.tool === "string" && item.tool.length <= 80 && object(item.arguments) && object(item.result)) &&
-      (value.status !== "answered" || value.evidence.some((item) => item.result.status === "ok")) &&
-      (value.needed_inputs === undefined || (Array.isArray(value.needed_inputs) && value.needed_inputs.length <= 6 && value.needed_inputs.every((item) => typeof item === "string" && item.length <= 200))) &&
-      (value.status !== "clarification" || value.needed_inputs?.length > 0) &&
-      (value.activity === undefined || (Array.isArray(value.activity) && value.activity.length <= 24 && value.activity.every((item) => object(item) && ["role", "tool", "status"].every((key) => typeof item[key] === "string" && item[key].length <= 160)))) &&
-      JSON.stringify(value).length <= 512000;
-  }
-  function renderToolEvidence(entry, directRequest = false) {
-    const result = entry.result;
-    const host = node("article", undefined, "ask-evidence-item");
-    const titles = { summarize_spending: "Observed spending", compare_spending: "Period comparison", get_transactions: "Transaction records", find_recurring_charges: "Recurring candidates", costar_search: "Apartment matches" };
-    host.append(node("h4", Object.hasOwn(titles, entry.tool) ? titles[entry.tool] : label(entry.tool)));
-    if (result.status !== "ok") {
-      host.append(node("p", "This read did not return usable evidence. No zero total or empty-market conclusion follows."));
-    } else if (entry.tool === "summarize_spending" && Number.isSafeInteger(result.net_spending_cents)) {
-      host.append(node("p", "Observed net spending: " + money(result.net_spending_cents) + ". History completeness is unknown."));
-    } else if (entry.tool === "compare_spending" && validComparison(result, entry.arguments)) {
-      host.append(node("p", "Observed net spending: " + money(result.total.baseline_cents) + " → " + money(result.total.current_cents) + "; change " + money(result.total.delta_cents) + "."));
-      for (const finding of result.findings) host.append(node("p", finding.text));
-      for (const caveat of result.caveats) host.append(node("p", caveat, "chart-note"));
-    } else if (entry.tool === "get_transactions") {
-      host.append(node("p", result.returned_rows + " of " + result.total_rows + " matching observed records returned. Signed contributions and excluded records are in the details."));
-    } else if (entry.tool === "find_recurring_charges") {
-      host.append(node("p", "Pattern candidates only; these do not confirm subscriptions, savings, or a next bill."));
-    } else if (entry.tool === "costar_search" && Array.isArray(result.results)) {
-      if (canonicalCriteria(result.criteria)) {
-        const criteria = result.criteria;
-        const budget = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(criteria.max_monthly_rent_usd);
-        host.append(node("p", "Applied catalog filters: " + criteria.state + (criteria.city ? ", " + criteria.city : ", any city") +
-          "; " + (criteria.bedrooms === 0 ? "studio" : criteria.bedrooms + " bedroom(s)") +
-          "; advertised starting rent at most " + budget + " per month, per unit; " + (criteria.min_square_feet ? "at least " + criteria.min_square_feet + " square feet" : "no minimum area") + "; up to " + criteria.limit + " results; " +
-          (criteria.include_specialized_housing ? "specialized housing included" : "specialized housing excluded") + (directRequest ? ". These are your submitted filters." : ". Compare these applied filters with your question."), "ask-applied-criteria"));
-      } else host.append(node("p", "Applied catalog filters are unavailable or unrecognized. Review the exact evidence before relying on these matches.", "ask-applied-criteria"));
-      host.append(node("p", result.results.length + " recorded matches shown. Availability is not live; the local catalog is not the whole market."));
-      if (result.results.length > 20) host.append(node("p", "The first 20 matches are summarized below; all returned records remain in the exact evidence."));
-      for (const row of result.results.slice(0, 20)) {
-        if (!object(row)) continue;
-        const listing = node("div", undefined, "ask-record");
-        listing.append(node("strong", String(row.property_name ?? "Property") + " · " + String(row.floor_plan_name ?? "Floor plan")));
-        const rent = row.asking_rent;
-        if (object(rent) && rent.currency === "USD" && rent.period === "month" && rent.basis === "per_unit" && Number.isSafeInteger(rent.minimum)) {
-          const dollars = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
-          listing.append(node("p", dollars(rent.minimum) + " – " + (Number.isSafeInteger(rent.maximum) ? dollars(rent.maximum) : "upper bound unknown") + " per month, per unit."));
-          if (row.price_range_within_budget !== true) listing.append(node("p", "The full range is not confirmed within the applied catalog budget."));
-        } else listing.append(node("p", "Rent units or range are unavailable; see the exact evidence."));
-        host.append(listing);
-      }
-    }
-    if (Array.isArray(result.limitations)) {
-      const list = node("ul", undefined, "ask-caveats");
-      for (const item of result.limitations) if (typeof item === "string") list.append(node("li", item));
-      host.append(list);
-    }
-    const details = node("details");
-    details.append(node("summary", directRequest ? "Exact catalog request and response" : "Exact tool evidence"), node("pre", JSON.stringify(directRequest ? { request: entry.arguments, response: result } : entry, null, 2)));
-    host.append(details);
-    return host;
-  }
-  function renderAskAnswer(result, question) {
-    $("ask-outcome").textContent = { answered: "Answered", clarification: "More information needed", limited: "Request limit reached", unavailable: "Answer unavailable" }[result.status];
-    $("ask-answer-title").textContent = { answered: "Answer", clarification: "Clarify your question", limited: "What was completed", unavailable: "Unable to answer" }[result.status];
-    $("ask-asked-question").textContent = question;
-    $("ask-answer").textContent = result.answer;
-    $("ask-usage").textContent = label(result.provider) + " · " + result.model + " · " + result.model_calls + " model calls · " + result.tool_calls + " tool calls";
-    if (Number.isSafeInteger(result.output_tokens_reserved) && result.output_tokens_reserved >= 0) $("ask-usage").textContent += " · " + result.output_tokens_reserved + " output tokens reserved (not billed usage)";
-    for (const item of result.activity || []) $("ask-activity").append(node("li", item.role + " · " + item.tool + " · " + item.status));
-    const inputLabels = {
-      date_range: "Start and end dates (UTC)", location: "City and state", monthly_rent_budget: "Monthly rent budget (USD)",
-      bedrooms: "Number of bedrooms", minimum_square_feet: "Minimum area (square feet)", housing_preferences: "Housing preferences",
-      financial_goal: "Financial goal", comparison_options: "Options to compare", household_size: "Household size",
-      income: "Income and its time period", savings_target: "Savings target and time frame",
-    };
-    for (const item of result.needed_inputs || []) $("ask-needed-inputs").append(node("li", Object.hasOwn(inputLabels, item) ? inputLabels[item] : item));
-    $("ask-clarification").classList.toggle("hidden", result.status !== "clarification");
-    $("ask-question").setAttribute("aria-describedby", "ask-guidance ask-counter" + (result.status === "clarification" ? " ask-needed-inputs" : ""));
-    const sourceName = { fixture: "Synthetic fixture", nessie: "Nessie sandbox" };
-    $("ask-source").textContent = "Spending source: " + (Object.hasOwn(sourceName, result.source) ? sourceName[result.source] : result.source) + ". Each tool record shows the dates and filters used.";
-    $("ask-revision").textContent = "Spending revision: " + result.source_hash;
-    for (const caveat of result.caveats) $("ask-caveats").append(node("li", caveat));
-    for (const entry of result.evidence) $("ask-evidence").append(renderToolEvidence(entry));
-    if (!result.evidence.length) $("ask-evidence").append(node("p", "No tool evidence was returned."));
-    $("ask-result").classList.remove("hidden");
-  }
-  $("ask-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!data || dashboardLoading || !askStatus?.enabled || askStatusLoading || askPending || catalogPending) return;
-    const question = $("ask-question").value.trim();
-    if (!question || $("ask-question").value.length > 2000) { $("ask-error").textContent = "Enter a question of 1 to 2000 characters."; return; }
-    const requestId = ++askSequence;
-    let completionMessage = "";
-    askController?.abort();
-    askController = new AbortController();
-    askPending = true;
-    clearAskAnswer();
-    $("ask-error").textContent = "";
-    $("ask-state").textContent = "Reading evidence and preparing an answer…";
-    updateAskControls();
-    startAskDeadline(requestId, 130000, false);
-    try {
-      const response = await fetch("/api/v1/agent/answer", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify({ question }), cache: "no-store", signal: askController.signal });
-      if (requestId !== askSequence) return;
-      if (response.status === 401) { lock(); $("access-error").textContent = "Your app token was not accepted. Unlock again to continue."; return; }
-      if (!response.ok) {
-        $("ask-error").textContent = ({ 429: "An AI request is already running. Wait briefly, then submit again.", 503: "The AI service is unavailable. Check availability before trying again.", 504: "The request reached its time limit. Try a narrower question." })[response.status] || "The backend could not answer this question. Check availability and try again.";
-        return;
-      }
-      const result = await response.json();
-      if (requestId !== askSequence) return;
-      if (!validAskAnswer(result)) throw new Error("invalid answer");
-      renderAskAnswer(result, question);
-      completionMessage = { answered: "Answer ready. Review the answer and supporting evidence below.", clarification: "More information is needed. Review the requested inputs and submit a complete question.", limited: "Request limit reached. Review the completed evidence and limits below.", unavailable: "Answer unavailable. Review any returned evidence and limitations below." }[result.status];
-    } catch (error) {
-      if (requestId !== askSequence || error.name === "AbortError") return;
-      $("ask-error").textContent = "A valid answer could not be received. Check the connection and try again.";
-    } finally {
-      if (requestId === askSequence) { clearTimeout(askTimer); askPending = false; $("ask-state").textContent = completionMessage; updateAskControls(); }
-    }
-  });
 
-  function updateComparisonControls() {
-    const ready = Boolean(data && !dashboardLoading && !comparisonPending);
-    for (const id of ["comparison-baseline-start", "comparison-baseline-end", "comparison-current-start", "comparison-current-end", "comparison-submit"]) $(id).disabled = !ready;
-    $("comparison-use-period").disabled = !ready || !data?.summary?.start || !data?.summary?.end;
-    $("comparison-cancel").classList.toggle("hidden", !comparisonPending);
-    $("comparison-form").setAttribute("aria-busy", String(comparisonPending));
-    $("comparison-submit").textContent = comparisonPending ? "Comparing…" : "Compare periods";
+  function chooseDraft(action) {
+    if (!state.data || state.data.period.end > state.data.source.coverage_end) { setText('manual-pilot-note', 'Choose an end date within observed coverage before drafting a pilot.'); return; }
+    resetPilot();
+    state.draft = action; $('draft-card').hidden = false;
+    $('pilot-segment').value = action.segment;
+    $('pilot-audience').value = String(Math.max(1, Math.min(20, action.customers)));
+    $('pilot-offer').value = '5.00'; $('pilot-budget').value = '50.00'; $('pilot-days').value = '14';
+    setText('draft-title', action.title); setText('draft-description', action.reason);
+    $('draft-hypothesis').value = action.suggestion || '';
+    $('draft-measure').value = 'Share of assigned customers with a completed return visit within the same evaluation window; compare the offer group with a randomly assigned holdout.';
+    setText('draft-status', 'Draft prepared in this tab. Review the idea and choose your own success criteria.');
+    $('draft-hypothesis').focus();
   }
-  function resetComparison(clearInputs = false) {
-    comparisonSequence += 1;
-    comparisonController?.abort();
-    clearTimeout(comparisonTimer);
-    comparisonController = null;
-    comparisonPending = false;
-    $("comparison-result").classList.add("hidden");
-    for (const id of ["comparison-state", "comparison-error", "comparison-period-label", "comparison-source", "comparison-evidence"]) $(id).textContent = "";
-    for (const id of ["comparison-totals", "comparison-findings", "comparison-categories", "comparison-merchants", "comparison-caveats"]) $(id).replaceChildren();
-    $("comparison-details").open = false;
-    if (clearInputs) $("comparison-form").reset();
-    updateComparisonControls();
+
+  function renderActions(actions) {
+    $('actions').replaceChildren(); setText('action-count', integer(actions.length));
+    const unobservedEnd = state.data.period.end > state.data.source.coverage_end, hasCustomers = state.data.customers.length > 0;
+    $('manual-pilot').disabled = unobservedEnd || !hasCustomers;
+    setText('manual-pilot-note', unobservedEnd ? 'Choose an end date within observed coverage before drafting a pilot. Later customer inactivity is unknown.' : !hasCustomers ? 'Load a period with observed customers before choosing an audience.' : 'Start from a suggestion, or define a pilot for any observed customer group.');
+    setText('spotlight-title', actions[0]?.title || (unobservedEnd ? 'Stay within what you observed.' : 'Make room for your own idea.'));
+    setText('spotlight-reason', actions[0]?.reason || (unobservedEnd ? 'Later dates contain no supplied evidence. Choose a covered period before reviewing a customer action.' : 'No automatic suggestion applies here. You can still define a small pilot using the customer groups you observed.'));
+    if (!actions.length) $('actions').append(element('p', 'empty-state', unobservedEnd ? 'Suggestions are withheld because the selected end is outside observed coverage.' : hasCustomers ? 'No automatic suggestion applies to these groups. Draft your own pilot to choose an observed audience and assumptions.' : 'There are no observed customers available for a pilot.'));
+    actions.forEach((action, index) => { const card = element('article', 'action-card'); card.append(element('span', 'action-number', String(index + 1).padStart(2, '0')), element('span', 'eyebrow', `${integer(action.customers)} CUSTOMERS · ${labels[action.segment] || action.segment || 'OBSERVED PATTERN'}`), element('h3', '', action.title), element('p', '', action.reason), element('p', 'action-metric', `Audience: ${action.metric}`)); const button = element('button', '', 'Draft an experiment'); button.type = 'button'; button.append(element('span', '', '→')); button.addEventListener('click', () => chooseDraft(action)); card.append(button); $('actions').append(card); });
   }
-  function calendarDay(text) {
-    if (typeof text !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(text) || Number(text.slice(0, 4)) < 1) return false;
-    const parsed = new Date(text + "T00:00:00Z");
-    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text;
+
+  function renderDefinitions(definitions, limitations) {
+    $('definitions').replaceChildren(); const list = element('dl'); Object.entries(definitions || {}).forEach(([key, value]) => { list.append(element('dt', '', titleCase(key)), element('dd', '', typeof value === 'string' ? value : JSON.stringify(value))); }); $('definitions').append(list);
+    $('limitations').replaceChildren(); (limitations || []).forEach((item) => $('limitations').append(element('li', '', item)));
   }
-  function validPeriods(value) {
-    return object(value) && ["baseline", "current"].every((key) => object(value[key]) && calendarDay(value[key].start) && calendarDay(value[key].end) && value[key].start <= value[key].end) && value.baseline.end < value.current.start;
+
+  function render(data) {
+    if (!data || !data.metrics || !data.source || !data.period || !Array.isArray(data.customers) || !Array.isArray(data.segments) || !Array.isArray(data.trend) || !Array.isArray(data.cohorts) || !Array.isArray(data.actions)) throw new Error('The server returned an incomplete customer snapshot. Please refresh.');
+    state.data = data;
+    setText('business-name', data.business.name); setText('source-mini', data.source.synthetic ? 'Fictional demo data' : 'Owner-provided data'); setText('source-pill', data.source.synthetic ? 'Synthetic demo' : 'Observed data');
+    $('start-date').value = data.period.start; $('end-date').value = data.period.end;
+    const metrics = data.metrics;
+    setText('metric-revenue', money(metrics.net_revenue_cents)); setText('revenue-detail', `${money(metrics.refund_cents)} in recorded refunds`);
+    const noLookback = data.period.start <= data.source.coverage_start;
+    const cutoff = data.source.segment_as_of || (data.period.end < data.source.coverage_end ? data.period.end : data.source.coverage_end);
+    const unobservedEnd = data.period.end > data.source.coverage_end, uncoveredStart = data.period.start < data.source.coverage_start;
+    setText('metric-returning', percent(metrics.returning_share)); setText('returning-detail', noLookback ? 'No earlier history supplied; not a first-time rate' : `${integer(metrics.returning_customers)} had a purchase before this period`);
+    setText('metric-customers', integer(metrics.active_customers)); setText('customers-detail', 'Identified buyers in this period');
+    setText('metric-average', money(metrics.gross_average_order_cents)); setText('orders-detail', 'Completed purchases before refunds');
+    setText('repeat-share', percent(metrics.within_period_repeat_share)); setText('repeat-count', `${integer(metrics.within_period_repeat_customers)} of ${integer(metrics.active_customers)} active customers had at least two completed purchases.`);
+    setText('customer-cutoff', `Groups and days since purchase are observed as of ${cutoff}. Orders and net revenue use ${data.period.start} to ${data.period.end}.`);
+    setText('repeat-caveat', 'No supplied purchase history precedes this window. The returning-customer figure cannot establish whether buyers are new to the business; this repeat measure counts purchases inside the selected period.'); $('repeat-caveat').hidden = !noLookback;
+    $('coverage-warning').hidden = !unobservedEnd && !uncoveredStart;
+    setText('coverage-warning', unobservedEnd ? `Selected dates extend beyond observed history ending ${data.source.coverage_end}. Empty later dates are unknown, not confirmed zero sales. Customer groups stop at ${cutoff}; suggestions and pilot drafting are withheld until you choose a covered end date.` : uncoveredStart ? `The selected start precedes supplied history beginning ${data.source.coverage_start}. Empty earlier dates are unknown, not confirmed zero sales.` : '');
+    renderChart(data.trend); renderSegments(data.segments); renderCustomers(); renderCohorts(data.cohorts); renderActions(data.actions); renderDefinitions(data.definitions, data.source.limitations);
+    setText('source-label', data.source.label); setText('coverage-label', `Observed ${data.source.coverage_start} – ${data.source.coverage_end} · UTC`);
+    setText('date-caption', `Customer groups as of ${cutoff} · UTC`);
+    $('dashboard-content').hidden = false; $('access-panel').hidden = true; $('lock-button').hidden = !state.token;
+    status('');
   }
-  function validComparison(result, expected) {
-    const change = (row) => {
-      if (!object(row) || !["baseline_cents", "current_cents", "delta_cents"].every((key) => Number.isSafeInteger(row[key]))) return false;
-      if (BigInt(row.current_cents) - BigInt(row.baseline_cents) !== BigInt(row.delta_cents)) return false;
-      if (row.baseline_cents <= 0) return row.percent_change_bps === null && row.percent_status === (row.baseline_cents === 0 ? "zero_baseline" : "negative_baseline");
-      if (row.percent_status !== "defined" || !Number.isSafeInteger(row.percent_change_bps)) return false;
-      const numerator = BigInt(row.delta_cents) * 10000n;
-      const denominator = BigInt(row.baseline_cents);
-      const magnitude = numerator < 0n ? -numerator : numerator;
-      // Match the server's ROUND_HALF_UP without losing cents in intermediate arithmetic.
-      const rounded = (magnitude * 2n + denominator) / (2n * denominator);
-      return BigInt(row.percent_change_bps) === (numerator < 0n ? -rounded : rounded);
-    };
-    if (!object(result) || result.status !== "ok" || result.calculation_version !== "spending-comparison-v1" || result.currency !== "USD" || result.coverage !== "observed_records_only" || !validPeriods(expected) || !validPeriods(result) || !change(result.total)) return false;
-    if (!["source_hash", "comparison_id"].every((key) => typeof result[key] === "string" && /^[a-f0-9]{64}$/.test(result[key])) || typeof result.source !== "string" || result.source.length > 256) return false;
-    for (const key of ["baseline", "current"]) {
-      const period = result[key];
-      if (period.start !== expected[key].start || period.end !== expected[key].end || !Number.isSafeInteger(period.duration_days) || period.duration_days < 1 || period.net_spending_cents !== result.total[key + "_cents"]) return false;
-      if (period.duration_days !== Math.round((new Date(period.end + "T00:00:00Z") - new Date(period.start + "T00:00:00Z")) / 86400000) + 1) return false;
-    }
-    if (result.equal_duration !== (result.baseline.duration_days === result.current.duration_days)) return false;
-    for (const key of ["categories", "merchants"]) {
-      const group = result[key];
-      if (!object(group) || !Array.isArray(group.rows) || group.rows.length > 10 || !group.rows.every((row) => change(row) && typeof row.label === "string" && row.label.length <= 300)) return false;
-      if (!Number.isSafeInteger(group.omitted_groups) || group.omitted_groups < 0) return false;
-      for (const metric of ["baseline_cents", "current_cents", "delta_cents"]) {
-        if (!Number.isSafeInteger(group["omitted_" + metric]) || group.rows.reduce((sum, row) => sum + BigInt(row[metric]), BigInt(group["omitted_" + metric])) !== BigInt(result.total[metric])) return false;
-      }
-    }
-    return Array.isArray(result.findings) && result.findings.length <= 5 && result.findings.every((row) => object(row) && typeof row.text === "string" && row.text.length <= 1600) && Array.isArray(result.caveats) && result.caveats.length <= 20 && result.caveats.every((item) => typeof item === "string" && item.length <= 1000) && JSON.stringify(result).length <= 64000;
+
+  async function load() {
+    const start = $('start-date').value, end = $('end-date').value;
+    if (start && end && start > end) { status('Choose an end date on or after the start date.', true); return; }
+    state.controller?.abort(); state.controller = new AbortController(); const sequence = ++state.sequence;
+    clearData(); $('access-panel').hidden = true; $('refresh').disabled = true; status('Reading your customer story…');
+    try { const query = periodQuery(); const data = await fetchJson(`/api/v1/owner/dashboard${query ? `?${query}` : ''}`, { signal: state.controller.signal }); if (sequence !== state.sequence) return; render(data); }
+    catch (error) { if (sequence !== state.sequence || error.name === 'AbortError') return; clearData(); if (error.auth) unlockRequired(); else status(error.message || 'Could not load customer data. Please try again.', true); }
+    finally { if (sequence === state.sequence) $('refresh').disabled = false; }
   }
-  $("comparison-use-period").addEventListener("click", () => {
-    if ($("comparison-use-period").disabled) return;
-    resetComparison();
-    const current = { start: data.summary.start, end: data.summary.end };
-    const start = new Date(current.start + "T00:00:00Z");
-    const end = new Date(current.end + "T00:00:00Z");
-    const days = Math.round((end - start) / 86400000) + 1;
-    if (!calendarDay(current.start) || !calendarDay(current.end) || days < 1) return;
-    const baseline = { start: isoDay(new Date(start.getTime() - days * 86400000)), end: isoDay(new Date(start.getTime() - 86400000)) };
-    if (!validPeriods({ baseline, current })) return;
-    for (const [key, value] of Object.entries({ baseline, current })) for (const edge of ["start", "end"]) $("comparison-" + key + "-" + edge).value = value[edge];
-    $("comparison-error").textContent = "";
-    $("comparison-state").textContent = "Dates filled. Review both periods, then choose Compare periods.";
-  });
-  $("comparison-cancel").addEventListener("click", () => {
-    if (!comparisonPending) return;
-    resetComparison();
-    $("comparison-state").textContent = "Stopped waiting. No comparison was accepted; the server may finish processing.";
-    if (!$("insights-view").classList.contains("hidden") && data && !dashboardLoading) $("comparison-submit").focus();
-  });
+
+  function evidenceText(value) {
+    if (typeof value === 'string') return value;
+    if (value === null || value === undefined) return '';
+    if (Array.isArray(value)) return value.map(evidenceText).join('\n');
+    if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${titleCase(key)}: ${key.endsWith('_cents') && Number.isFinite(item) ? money(item) : evidenceText(item)}`).join(' · ');
+    return String(value);
+  }
+
+  async function ask(event) {
+    event.preventDefault(); const question = $('question').value.trim(); if (!question || !state.data) return;
+    resetAnswer(); const sequence = state.askSequence; const dataSequence = state.sequence; state.askController = new AbortController(); $('ask-submit').disabled = true; setText('ask-status', 'Investigating the observed customer data…');
+    try { const result = await fetchJson('/api/v1/owner/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, start: state.data.period.start, end: state.data.period.end }), signal: state.askController.signal });
+      if (sequence !== state.askSequence || dataSequence !== state.sequence) return;
+      if (!result.source?.revision || result.source.revision !== state.data.source.revision || !result.source.dataset_id || result.source.dataset_id !== state.data.source.dataset_id || !samePeriod(result.period, state.data.period)) throw new Error('The dataset changed during this investigation. Refresh the dashboard and ask again.');
+      if (typeof result.answer !== 'string') throw new Error('The investigation returned no answer. Please try again.');
+      setText('answer', result.answer); $('evidence').replaceChildren();
+      const evidence = Array.isArray(result.evidence) ? result.evidence : result.evidence ? [result.evidence] : [];
+      evidence.forEach((item) => $('evidence').append(element('div', 'evidence-item', evidenceText(item))));
+      $('answer-limitations').replaceChildren(); (result.limitations || []).forEach((item) => $('answer-limitations').append(element('li', '', item)));
+      const isModel = ['gemini', 'nemotron'].includes(result.provider), completed = result.status === 'answered';
+      const providerLabel = { deterministic: 'Offline calculation', gemini: 'Gemini', nemotron: 'NVIDIA Nemotron' }[result.provider] || 'Unknown provider';
+      const resultLabel = { answered: 'Answered', limited: 'Resource limit reached', unavailable: 'Unavailable', clarification: 'Clarification needed' }[result.status] || 'Incomplete response';
+      setText('answer-label', completed ? (isModel ? 'MODEL INTERPRETATION · CHECK THE EVIDENCE' : 'OBSERVED DATA, EXPLAINED') : `INCOMPLETE INVESTIGATION · ${resultLabel.toUpperCase()}`);
+      setText('answer-meta', `${providerLabel} · ${resultLabel}${Number.isInteger(result.model_calls) ? ` · ${result.model_calls} model calls` : ''}${Number.isInteger(result.tool_calls) ? ` · ${result.tool_calls} tool calls` : ''}${!completed && evidence.length ? ' · Partial evidence only' : ''}`);
+      $('ask-result').classList.toggle('incomplete', !completed); $('answer-activity').replaceChildren();
+      const activity = Array.isArray(result.activity) ? result.activity : []; activity.forEach((item) => $('answer-activity').append(element('li', '', evidenceText(item)))); $('answer-activity-details').hidden = activity.length === 0;
+      $('ask-result').hidden = false; setText('ask-status', '');
+    } catch (error) { if (sequence !== state.askSequence || dataSequence !== state.sequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('ask-status', error.message || 'Could not complete this investigation.'); }
+    finally { if (sequence === state.askSequence) $('ask-submit').disabled = false; }
+  }
+
+  async function exportCustomers() {
+    if (!state.data) return; const sequence = state.sequence; $('export-customers').disabled = true;
+    try { const query = new URLSearchParams(state.data.period); const response = await fetch(`/api/v1/owner/export.csv?${query}`, options()); if (sequence !== state.sequence) return; if (response.status === 401) { unlockRequired(); return; } if (!response.ok) throw new Error(`Export failed (${response.status}).`); if (!state.data.source.revision || response.headers?.get('X-Source-Revision') !== state.data.source.revision || !state.data.source.dataset_id || response.headers?.get('X-Dataset-ID') !== state.data.source.dataset_id) throw new Error('The dataset changed before export. Refresh the dashboard and export again.'); const blob = await response.blob(); if (sequence !== state.sequence) return; const url = URL.createObjectURL(blob); const link = element('a'); link.href = url; link.download = `regulars-customers-${state.data.period.start}-${state.data.period.end}.csv`; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); status('Customer export downloaded for the selected period.'); }
+    catch (error) { if (sequence === state.sequence) status(error.message || 'Export failed. Please try again.', true); }
+    finally { $('export-customers').disabled = false; }
+  }
+
+  function resetComparison() { state.comparisonSequence++; state.comparisonController?.abort(); $('comparison-result').hidden = true; $('comparison-totals').replaceChildren(); $('comparison-groups').replaceChildren(); $('comparison-contributors').replaceChildren(); $('comparison-limitations').replaceChildren(); $('comparison-contributor-details').open = false; setText('comparison-status', ''); $('compare-button').disabled = false; }
+  function resetPilot() { state.pilotResult = null; state.pilotSequence++; state.pilotController?.abort(); $('pilot-result').hidden = true; $('pilot-numbers').replaceChildren(); $('pilot-limitations').replaceChildren(); setText('pilot-status', ''); $('pilot-submit').disabled = false; }
+  function resetAnalysis() { resetComparison(); resetPilot(); }
+  const samePeriod = (a, b) => a?.start === b?.start && a?.end === b?.end;
+  const signedMoney = (value) => `${value > 0 ? '+' : ''}${money(value)}`;
   function renderComparison(result) {
-    $("comparison-period-label").textContent = "Earlier: " + result.baseline.start + " through " + result.baseline.end + " (" + result.baseline.duration_days + " days). Later: " + result.current.start + " through " + result.current.end + " (" + result.current.duration_days + " days). Inclusive UTC dates.";
-    const total = result.total;
-    for (const [title, value] of [["Earlier net spending", total.baseline_cents], ["Later net spending", total.current_cents], ["Change in net spending", total.delta_cents]]) {
-      const card = node("div", undefined, "comparison-total");
-      card.append(node("p", title), node("strong", money(value)));
-      $("comparison-totals").append(card);
-    }
-    const percent = total.percent_status === "defined" ? "Total change: " + (total.percent_change_bps / 100).toFixed(2) + "%." : "A percentage change is undefined because the earlier net total is " + (total.percent_status === "zero_baseline" ? "zero." : "negative.");
-    $("comparison-totals").append(node("p", percent, "chart-note"));
-    for (const finding of result.findings) $("comparison-findings").append(node("li", finding.text));
-    for (const key of ["categories", "merchants"]) {
-      const group = result[key];
-      if (!group.rows.length) $("comparison-" + key).append(node("p", "No included records in these observed periods.", "chart-note"));
-      for (const row of group.rows) {
-        const element = node("div", undefined, "ask-record");
-        element.append(node("strong", row.label + (row.label_truncated ? "…" : "")), node("p", money(row.baseline_cents) + " → " + money(row.current_cents) + "; change " + money(row.delta_cents) + "."));
-        $("comparison-" + key).append(element);
-      }
-      if (group.omitted_groups) $("comparison-" + key).append(node("p", group.omitted_groups + " more groups, with combined change " + money(group.omitted_delta_cents) + ". All groups are included in the total.", "chart-note"));
-    }
-    for (const caveat of result.caveats) $("comparison-caveats").append(node("li", caveat));
-    $("comparison-source").textContent = "Source: " + result.source + " · Revision: " + result.source_hash;
-    $("comparison-evidence").textContent = JSON.stringify(result, null, 2);
-    $("comparison-result").classList.remove("hidden");
+    const expected = state.data;
+    if (!result.source?.revision || result.source.revision !== expected.source.revision || !result.source.dataset_id || result.source.dataset_id !== expected.source.dataset_id || !samePeriod(result.current?.period, expected.period)) throw new Error('The dataset changed during this comparison. Refresh the dashboard and try again.');
+    if (!result.baseline?.metrics || !Array.isArray(result.groups) || !Array.isArray(result.contributors) || !Number.isSafeInteger(result.delta_cents)) throw new Error('The comparison response is incomplete. Please try again.');
+    $('comparison-totals').replaceChildren();
+    const totals = [
+      ['EARLIER OBSERVED REVENUE', money(result.baseline.metrics.net_revenue_cents), `${result.baseline.period.start} to ${result.baseline.period.end}`],
+      ['CURRENT OBSERVED REVENUE', money(result.current.metrics.net_revenue_cents), `${result.current.period.start} to ${result.current.period.end}`],
+      ['OBSERVED CHANGE', signedMoney(result.delta_cents), Number.isFinite(result.change_fraction) ? `${result.change_fraction > 0 ? '+' : ''}${percent(result.change_fraction)} · ${result.days_per_period} days per period` : 'Percentage unavailable · incomplete coverage or nonpositive baseline'],
+    ];
+    totals.forEach(([label, value, detail]) => { const card = element('div', 'comparison-total'); card.append(element('span', '', label), element('strong', '', value), element('small', '', detail)); $('comparison-totals').append(card); });
+    setText('comparison-coverage', result.fully_covered ? 'Both windows fall within the supplied coverage. The difference describes observed records, not why behavior changed.' : 'Incomplete coverage: at least one window extends beyond supplied history. Empty dates are unknown, and percentage comparisons are unavailable.'); $('comparison-coverage').classList.toggle('warning', !result.fully_covered);
+    $('comparison-groups').replaceChildren(); result.groups.forEach((group) => { const row = element('tr'); row.append(element('td', '', group.label), element('td', '', integer(group.customers)), element('td', '', money(group.baseline_cents)), element('td', '', money(group.current_cents)), element('td', group.delta_cents < 0 ? 'negative' : 'positive', signedMoney(group.delta_cents))); $('comparison-groups').append(row); });
+    $('comparison-contributors').replaceChildren(); result.contributors.forEach((customer) => { const row = element('tr'); row.append(element('td', '', customer.customer_id), element('td', '', money(customer.baseline_cents)), element('td', '', money(customer.current_cents)), element('td', customer.delta_cents < 0 ? 'negative' : 'positive', signedMoney(customer.delta_cents))); $('comparison-contributors').append(row); });
+    setText('comparison-omitted', `${integer(result.omitted_contributors)} additional contributors omitted from this detail table; their combined change is ${signedMoney(result.omitted_delta_cents)}. All customer contributions reconcile to ${signedMoney(result.reconciled_delta_cents)}.`);
+    $('comparison-limitations').replaceChildren(); (result.limitations || []).forEach((item) => $('comparison-limitations').append(element('li', '', item))); $('comparison-result').hidden = false;
   }
-  $("comparison-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!data || dashboardLoading || comparisonPending) return;
-    const periods = {};
-    for (const key of ["baseline", "current"]) periods[key] = Object.freeze({ start: $("comparison-" + key + "-start").value, end: $("comparison-" + key + "-end").value });
-    if (!validPeriods(periods)) { resetComparison(); $("comparison-error").textContent = "Choose valid dates for both periods. The earlier period must finish before the later period starts."; return; }
-    Object.freeze(periods);
-    resetComparison();
-    const requestId = comparisonSequence;
-    comparisonPending = true;
-    comparisonController = new AbortController();
-    $("comparison-state").textContent = "Calculating changes from observed records…";
-    updateComparisonControls();
-    comparisonTimer = setTimeout(() => {
-      if (requestId !== comparisonSequence) return;
-      resetComparison();
-      $("comparison-error").textContent = "The comparison timed out. No result was accepted; you can try again.";
-    }, 50000);
-    let completion = "";
-    try {
-      const response = await fetch("/api/v1/spending/compare", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify(periods), cache: "no-store", redirect: "error", signal: comparisonController.signal });
-      if (requestId !== comparisonSequence) return;
-      if (response.status === 401) { lock(); $("access-error").textContent = "Unlock with a valid app token to compare spending."; return; }
-      if (!response.ok) {
-        $("comparison-error").textContent = ({ 422: "The date ranges were rejected. Review both periods.", 429: "Another comparison is running. Wait briefly before trying again.", 503: "Observed data is unavailable for this comparison.", 504: "The comparison reached its time limit." })[response.status] || "The comparison could not be completed. No result was accepted.";
-        return;
-      }
-      const result = await response.json();
-      if (requestId !== comparisonSequence) return;
-      if (!validComparison(result, periods)) throw new Error("invalid comparison");
-      renderComparison(result);
-      completion = "Comparison ready. Review the exact totals, contributions and data limitations below.";
-    } catch (error) {
-      if (requestId !== comparisonSequence || error.name === "AbortError") return;
-      $("comparison-error").textContent = "A valid comparison matching your periods could not be received. No result was accepted.";
-    } finally {
-      if (requestId === comparisonSequence) {
-        clearTimeout(comparisonTimer);
-        comparisonPending = false;
-        $("comparison-state").textContent = completion;
-        updateComparisonControls();
-      }
-    }
-  });
+  async function explainChange() { if (!state.data) return; resetComparison(); const sequence = state.comparisonSequence, dataSequence = state.sequence; state.comparisonController = new AbortController(); $('compare-button').disabled = true; setText('comparison-status', 'Comparing observed purchases and refunds across two equal windows…');
+    try { const query = new URLSearchParams(state.data.period); const result = await fetchJson(`/api/v1/owner/compare?${query}`, { signal: state.comparisonController.signal }); if (sequence !== state.comparisonSequence || dataSequence !== state.sequence) return; renderComparison(result); setText('comparison-status', ''); }
+    catch (error) { if (sequence !== state.comparisonSequence || dataSequence !== state.sequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('comparison-status', error.message || 'The period comparison could not be completed.'); }
+    finally { if (sequence === state.comparisonSequence) $('compare-button').disabled = false; }
+  }
+  function decimalCents(value, label, maximum) { if (!/^\d+(?:\.\d{1,2})?$/.test(value.trim())) throw new Error(`${label} must be dollars with at most two decimal places.`); const [whole, fraction = ''] = value.trim().split('.'); const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0')); if (!Number.isSafeInteger(cents) || cents < 0 || cents > maximum) throw new Error(`${label} must be between $0.00 and ${money(maximum)}.`); return cents; }
+  function wholeNumber(value, label, minimum, maximum) { if (!/^\d+$/.test(value)) throw new Error(`${label} must be a whole number.`); const number = Number(value); if (!Number.isSafeInteger(number) || number < minimum || number > maximum) throw new Error(`${label} must be between ${minimum} and ${maximum}.`); return number; }
+  function renderPilot(result) {
+    if (!result.source_revision || result.source_revision !== state.data.source.revision || !samePeriod(result.period, state.data.period)) throw new Error('The dataset changed while calculating. Refresh the dashboard and calculate again.');
+    if (!Number.isSafeInteger(result.maximum_offer_cost_cents) || !Number.isSafeInteger(result.treatment_customers) || !Number.isSafeInteger(result.holdout_customers)) throw new Error('The pilot calculation response is incomplete.');
+    const small = result.treatment_customers + result.holdout_customers < 4, overBudget = result.within_budget === false;
+    const verdict = overBudget ? `Exceeds the offer budget by ${money(result.maximum_offer_cost_cents - result.budget_cents)}. Revise the audience cap, offer, or explicit budget.` : small ? 'Too few observed customers for this illustrative pilot. At least four are needed for the split.' : 'Fits the entered offer budget. Review eligibility, consent, and all other costs before deciding whether to proceed.';
+    setText('pilot-verdict', verdict + (overBudget && small ? ' The observed audience is also smaller than four customers.' : '')); $('pilot-verdict').classList.toggle('warning', overBudget || small);
+    $('pilot-numbers').replaceChildren(); [[integer(result.treatment_customers), 'Proposed offer group'], [integer(result.holdout_customers), 'Proposed holdout group'], [money(result.maximum_offer_cost_cents), 'Maximum offer cost'], [`${integer(result.window_days)} days`, 'Equal evaluation window']].forEach(([value, label]) => { const card = element('div', 'pilot-number'); card.append(element('strong', '', value), element('span', '', label)); $('pilot-numbers').append(card); });
+    state.pilotResult = { ...result, dataset_id: state.data.source.dataset_id };
+    setText('pilot-method', result.method); setText('pilot-measure', result.success_metric); $('pilot-limitations').replaceChildren(); (result.limitations || []).forEach((item) => $('pilot-limitations').append(element('li', '', item))); $('pilot-result').hidden = false;
+  }
+  async function calculatePilot(event) { event.preventDefault(); if (!state.data || !state.draft) return; resetPilot(); const sequence = state.pilotSequence, dataSequence = state.sequence;
+    try { const body = { segment: $('pilot-segment').value, max_customers: wholeNumber($('pilot-audience').value, 'Audience cap', 1, 1000), offer_cents: decimalCents($('pilot-offer').value, 'Offer', 5000), window_days: wholeNumber($('pilot-days').value, 'Evaluation days', 7, 90), budget_cents: decimalCents($('pilot-budget').value, 'Budget', 5000000), start: state.data.period.start, end: state.data.period.end }; state.pilotController = new AbortController(); $('pilot-submit').disabled = true; setText('pilot-status', 'Calculating the capped audience and maximum offer cost…'); const result = await fetchJson('/api/v1/owner/experiments/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: state.pilotController.signal }); if (sequence !== state.pilotSequence || dataSequence !== state.sequence) return; renderPilot(result); setText('pilot-status', ''); }
+    catch (error) { if (sequence !== state.pilotSequence || dataSequence !== state.sequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('pilot-status', error.message || 'The pilot could not be calculated.'); }
+    finally { if (sequence === state.pilotSequence) $('pilot-submit').disabled = false; }
+  }
+  $('compare-button').addEventListener('click', explainChange); $('pilot-form').addEventListener('submit', calculatePilot);
+  ['pilot-segment', 'pilot-audience', 'pilot-offer', 'pilot-budget', 'pilot-days'].forEach((id) => { $(id).addEventListener('input', resetPilot); $(id).addEventListener('change', resetPilot); });
+  ['start-date', 'end-date'].forEach((id) => { $(id).addEventListener('input', resetAnalysis); $(id).addEventListener('change', resetAnalysis); });
 
-  function renderCategories() {
-    const all = data.expense_categories;
-    const categories = all.length > 6 ? all.slice(0, 5).concat([{ category: "Other categories", amount_cents: all.slice(5).reduce((sum, item) => sum + item.amount_cents, 0) }]) : all;
-    const legend = $("category-legend");
-    legend.replaceChildren();
-    let position = 0;
-    const segments = [];
-    categories.forEach((item, index) => {
-      const percent = data.gross_spending_cents ? item.amount_cents / data.gross_spending_cents * 100 : 0;
-      const color = colors[index % colors.length];
-      segments.push(color + " " + position + "% " + (position + percent) + "%");
-      position += percent;
-      const row = node("div");
-      const swatch = node("span", "", "legend-swatch");
-      swatch.style.backgroundColor = color;
-      const amount = node("strong", money(item.amount_cents));
-      amount.append(node("small", percent.toFixed(1) + "%"));
-      row.append(swatch, node("span", label(item.category)), amount);
-      legend.append(row);
-    });
-    if (!categories.length) legend.append(node("p", "No completed expenses in this period.", "empty-state"));
-    $("category-donut").style.background = data.gross_spending_cents > 0 ? "conic-gradient(" + segments.join(",") + ")" : "#e4e9e5";
-    $("category-donut").setAttribute("aria-label", "Completed expenses before refunds: " + money(data.gross_spending_cents));
-    $("gross-total").textContent = shortMoney(data.gross_spending_cents);
-    $("gross-total").title = money(data.gross_spending_cents);
-    $("refund-note").textContent = money(data.gross_spending_cents) + " in expenses − " + money(data.refunds_cents) + " in refunds = " + money(data.summary.net_spending_cents) + " net spending.";
+  const importState = { sequence: 0, preview: null, reviewed: null, busy: false, canImport: false };
+  const importStatus = (message) => setText('data-source-status', message);
+  function invalidatePreview() { importState.sequence++; importState.preview = null; importState.reviewed = null; $('import-preview').hidden = true; $('import-summary').replaceChildren(); $('import-warnings').replaceChildren(); }
+  function setImportBusy(busy) { importState.busy = busy; $('data-drawer').setAttribute('aria-busy', String(busy)); ['import-business', 'import-file', 'import-csv', 'import-synthetic', 'preview-import', 'commit-import', 'select-dataset', 'dataset-select'].forEach((id) => { $(id).disabled = busy || !importState.canImport; }); }
+  function closeDataDrawer() { if (importState.busy) return; $('data-drawer').hidden = true; $('data-drawer-backdrop').hidden = true; $('main').removeAttribute('inert'); document.querySelector('.sidebar').removeAttribute('inert'); $('data-source-button').focus(); }
+  async function refreshDatasets() { const result = await fetchJson('/api/v1/owner/datasets'); $('dataset-select').replaceChildren(); result.datasets.forEach((dataset) => { const option = element('option', '', `${dataset.business_name} · ${dataset.synthetic ? 'Synthetic demo' : 'Imported data'}`); option.value = dataset.id; $('dataset-select').append(option); }); $('dataset-select').value = result.active_id; }
+  async function openDataDrawer() {
+    $('data-drawer').hidden = false; $('data-drawer-backdrop').hidden = false; $('main').setAttribute('inert', ''); document.querySelector('.sidebar').setAttribute('inert', ''); $('close-data-drawer').focus(); importStatus('Checking available datasets…');
+    try { const capability = await fetchJson('/api/v1/owner/status'); importState.canImport = capability.can_import === true; setImportBusy(false); await refreshDatasets(); if (!$('data-drawer').hidden) importStatus(importState.canImport ? '' : 'This workspace is read-only. Dataset import and switching are unavailable.'); }
+    catch (error) { if (error.auth) { closeDataDrawer(); unlockRequired(); } else importStatus(error.message || 'Could not load datasets.'); }
   }
-  function svgNode(tag, attrs, text) {
-    const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
-    if (text !== undefined) element.textContent = text;
-    return element;
-  }
-  function renderMonths() {
-    if (!data || $("overview-view").classList.contains("hidden")) return;
-    const host = $("monthly-chart");
-    host.replaceChildren();
-    const months = data.monthly_spending;
-    if (!months.length) {
-      host.append(node("p", "No transaction activity in this period.", "empty-state"));
-      return;
-    }
-    const width = Math.max(host.clientWidth || 420, months.length * 65 + 55);
-    const high = Math.max(0, ...months.map((row) => row.net_spending_cents));
-    const low = Math.min(0, ...months.map((row) => row.net_spending_cents));
-    const span = high - low || 1;
-    const y = (value) => 24 + (high - value) / span * 130;
-    const zero = y(0);
-    const step = (width - 65) / months.length;
-    const svg = svgNode("svg", { viewBox: "0 0 " + width + " 200", role: "img", "aria-label": "Monthly net spending in USD. " + months.map((row) => row.month + ": " + money(row.net_spending_cents)).join("; ") });
-    svg.style.minWidth = width + "px";
-    svg.append(svgNode("line", { x1: 48, x2: width - 8, y1: zero, y2: zero, stroke: "#dce6df" }));
-    svg.append(svgNode("text", { x: 0, y: 28, class: "chart-axis" }, shortMoney(high)));
-    if (low < 0) svg.append(svgNode("text", { x: 0, y: 157, class: "chart-axis" }, shortMoney(low)));
-    months.forEach((row, index) => {
-      const x = 55 + step * index + step * 0.15;
-      const valueY = y(row.net_spending_cents);
-      const bar = svgNode("rect", { x, y: Math.min(zero, valueY), width: Math.min(48, step * 0.7), height: Math.abs(zero - valueY), rx: 4, fill: row.net_spending_cents < 0 ? "#6ca4e5" : "#4eb28a" });
-      bar.append(svgNode("title", {}, row.month + " · " + money(row.net_spending_cents)));
-      svg.append(bar);
-      svg.append(svgNode("text", { x, y: row.net_spending_cents < 0 ? valueY + 15 : valueY - 7, class: "chart-value" }, shortMoney(row.net_spending_cents)));
-      const monthName = new Intl.DateTimeFormat("en-US", { month: "short", year: "2-digit", timeZone: "UTC" }).format(new Date(row.month + "-01T00:00:00Z"));
-      svg.append(svgNode("text", { x, y: 190, class: "chart-axis" }, monthName));
-    });
-    host.append(svg);
-  }
-  window.addEventListener("resize", () => { if (data) renderMonths(); });
-  function transactionName(row) {
-    return row.merchant !== "Unknown merchant" ? row.merchant : row.description || label(row.kind);
-  }
-  function statusBadge(status) {
-    return node("span", label(status), "status " + (status === "completed" ? "categorized" : status === "pending" ? "needs-context" : "neutral-status"));
-  }
-  function renderActivity() {
-    const host = $("recent-activity");
-    host.replaceChildren();
-    data.transactions.slice(0, 5).forEach((tx) => {
-      const row = node("div", undefined, "activity-row");
-      const info = node("div", undefined, "activity-info");
-      info.append(node("strong", transactionName(tx)), node("span", dateLabel(tx.occurred_at) + " · " + label(tx.kind)));
-      row.append(node("div", transactionName(tx).slice(0, 1).toUpperCase(), "merchant-icon whole"), info, node("strong", money(tx.amount_cents), "amount"), statusBadge(tx.status));
-      host.append(row);
-    });
-    if (!data.transactions.length) host.append(node("p", "No transactions in this period.", "empty-state"));
-  }
-  function filteredTransactions() {
-    if (!data) return [];
-    const search = $("transaction-search").value.trim().toLowerCase();
-    return data.transactions.filter((row) => {
-      const statusMatches = statusFilter === "all" || (statusFilter === "other" ? !["completed", "pending"].includes(row.status) : row.status === statusFilter);
-      const text = [row.merchant, row.description, row.category, label(row.kind), row.id].join(" ").toLowerCase();
-      return statusMatches && (!search || text.includes(search));
-    });
-  }
-  function renderTransactions() {
-    if (!data) return;
-    const rows = filteredTransactions();
-    const pageTotal = Math.max(1, Math.ceil(rows.length / pageSize));
-    page = Math.min(page, pageTotal - 1);
-    const host = $("transaction-rows");
-    host.replaceChildren();
-    rows.slice(page * pageSize, (page + 1) * pageSize).forEach((tx) => {
-      const row = node("tr");
-      row.dataset.status = tx.status;
-      const merchant = node("td");
-      merchant.append(node("strong", transactionName(tx)), node("small", tx.description || tx.id));
-      const amount = node("td", money(tx.amount_cents), "amount");
-      const status = node("td");
-      status.append(statusBadge(tx.status), node("small", label(tx.kind)));
-      row.append(merchant, node("td", dateLabel(tx.occurred_at)), node("td", label(tx.category)), amount, status);
-      host.append(row);
-    });
-    if (!rows.length) {
-      const cell = node("td", data.transactions.length ? "No transactions match these filters." : "No transactions in this period.", "empty-state");
-      cell.colSpan = 5;
-      const row = node("tr");
-      row.append(cell);
-      host.append(row);
-    }
-    $("transaction-count").textContent = rows.length + " matching transactions · " + data.transactions.length + " in this period";
-    $("page-count").textContent = "Page " + (page + 1) + " of " + pageTotal;
-    $("previous-page").disabled = page === 0;
-    $("next-page").disabled = page + 1 >= pageTotal;
-    $("export-transactions").disabled = !rows.length;
-  }
-  document.querySelectorAll(".tab[data-filter]").forEach((tab) => tab.addEventListener("click", () => {
-    statusFilter = tab.dataset.filter;
-    page = 0;
-    document.querySelectorAll(".tab[data-filter]").forEach((item) => {
-      const active = item === tab;
-      item.classList.toggle("active", active);
-      item.setAttribute("aria-pressed", String(active));
-    });
-    renderTransactions();
-  }));
-  $("transaction-search").addEventListener("input", () => { page = 0; renderTransactions(); });
-  $("previous-page").addEventListener("click", () => { page = Math.max(0, page - 1); renderTransactions(); });
-  $("next-page").addEventListener("click", () => { page += 1; renderTransactions(); });
+  function csvBody() { const csv = $('import-csv').value, business_name = $('import-business').value.trim(); if (!business_name) throw new Error('Enter a business name before previewing.'); if (!csv.trim()) throw new Error('Choose a CSV file or paste its contents.'); if (new Blob([csv]).size > 750000) throw new Error('The CSV exceeds the 750 KB limit.'); return { csv, business_name, synthetic: $('import-synthetic').checked }; }
+  function renderImportPreview(preview) { if (!/^[a-f0-9]{64}$/.test(preview.preview_hash || '')) throw new Error('The import preview is incomplete. Please try again.'); $('import-summary').replaceChildren(); const rows = { Business: preview.business_name || importState.reviewed.business_name, Orders: integer(preview.orders), Refunds: integer(preview.refunds), Customers: integer(preview.customers), 'First record': preview.coverage_start, 'Last record': preview.coverage_end, 'Source label': preview.synthetic ? 'Synthetic or test data' : 'Owner-provided data' }; Object.entries(rows).forEach(([label, value]) => { $('import-summary').append(element('dt', '', label), element('dd', '', value)); }); $('import-warnings').replaceChildren(); (preview.warnings || []).forEach((warning) => $('import-warnings').append(element('li', '', warning))); $('import-preview').hidden = false; }
+  async function previewImport(event) { event.preventDefault(); if (importState.busy || !importState.canImport) return; invalidatePreview(); const sequence = importState.sequence; try { const body = csvBody(); setImportBusy(true); importStatus('Validating the complete CSV…'); const preview = await fetchJson('/api/v1/owner/import/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (sequence !== importState.sequence) return; importState.preview = preview; importState.reviewed = body; renderImportPreview(preview); importStatus('Preview ready. Review the counts, dates, and limitations before importing.'); }
+    catch (error) { if (sequence !== importState.sequence) return; if (error.auth) { setImportBusy(false); closeDataDrawer(); unlockRequired(); } else importStatus(error.message || 'The CSV could not be validated.'); } finally { setImportBusy(false); } }
+  async function commitImport() { if (importState.busy || !importState.canImport || !importState.preview || !importState.reviewed) return; try { const current = csvBody(); if (JSON.stringify(current) !== JSON.stringify(importState.reviewed)) { invalidatePreview(); throw new Error('The input changed. Preview it again before importing.'); } setImportBusy(true); importStatus('Saving the reviewed dataset…'); await fetchJson('/api/v1/owner/import/commit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...importState.reviewed, preview_hash: importState.preview.preview_hash }) }); invalidatePreview(); $('import-csv').value = ''; $('import-file').value = ''; $('start-date').value = ''; $('end-date').value = ''; $('customer-search').value = ''; await refreshDatasets(); await load(); importStatus('Imported successfully. The workspace now shows your separate reviewed dataset.'); }
+    catch (error) { if (error.auth) { setImportBusy(false); closeDataDrawer(); unlockRequired(); } else importStatus(`${error.message || 'Import could not be completed.'} Check the dataset list before retrying if the connection was interrupted.`); } finally { setImportBusy(false); } }
+  async function selectDataset() { if (importState.busy || !importState.canImport) return; try { setImportBusy(true); importStatus('Switching datasets…'); await fetchJson('/api/v1/owner/datasets/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataset_id: $('dataset-select').value }) }); invalidatePreview(); $('start-date').value = ''; $('end-date').value = ''; $('customer-search').value = ''; await load(); importStatus('Dataset switched. Dates now match its observed history.'); }
+    catch (error) { if (error.auth) { setImportBusy(false); closeDataDrawer(); unlockRequired(); } else importStatus(error.message || 'Dataset could not be switched.'); } finally { setImportBusy(false); } }
+  $('data-source-button').addEventListener('click', openDataDrawer); $('close-data-drawer').addEventListener('click', closeDataDrawer); $('data-drawer-backdrop').addEventListener('click', closeDataDrawer);
+  $('import-form').addEventListener('submit', previewImport); $('commit-import').addEventListener('click', commitImport); $('select-dataset').addEventListener('click', selectDataset);
+  ['import-business', 'import-csv'].forEach((id) => $(id).addEventListener('input', () => { invalidatePreview(); importStatus('Input changed. Preview again before saving.'); }));
+  $('import-synthetic').addEventListener('change', () => { invalidatePreview(); importStatus('Source label changed. Preview again before saving.'); });
+  $('import-file').addEventListener('change', async () => { invalidatePreview(); const sequence = importState.sequence; const file = $('import-file').files[0]; if (!file) return; if (file.size > 750000) { importStatus('The file exceeds the 750 KB limit. Choose a smaller sales export.'); return; } try { const text = typeof file.text === 'function' ? await file.text() : await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('File could not be read.')); reader.readAsText(file, 'UTF-8'); }); if (sequence !== importState.sequence) return; $('import-csv').value = text; importStatus('File loaded into the preview form. Review the business name, then preview the import.'); } catch { importStatus('This file could not be read as text. Try a UTF-8 CSV export.'); } });
+  $('download-template').addEventListener('click', async () => { try { const response = await fetch('/api/v1/owner/import/template.csv', options()); if (response.status === 401) { closeDataDrawer(); unlockRequired(); return; } if (!response.ok) throw new Error('Template download failed.'); const url = URL.createObjectURL(await response.blob()); const link = element('a'); link.href = url; link.download = 'regulars-import-template.csv'; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); importStatus('CSV template downloaded. Replace the examples with your own pseudonymous records.'); } catch (error) { importStatus(error.message || 'Template download failed.'); } });
+  $('data-drawer').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); closeDataDrawer(); } if (event.key === 'Tab') { const focusable = [...$('data-drawer').querySelectorAll('button, input, select, textarea, [tabindex]')].filter((node) => !node.disabled && !node.closest('[hidden]')); const first = focusable[0], last = focusable.at(-1); if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } });
 
-  function amountRow(title, value) {
-    const row = node("div", undefined, "amount-row");
-    row.append(node("span", title), node("strong", value));
-    return row;
+  document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => switchView(button.dataset.view)));
+  document.querySelectorAll('[data-question]').forEach((button) => button.addEventListener('click', () => { $('question').value = button.dataset.question; $('question').focus(); }));
+  $('view-experiments').addEventListener('click', () => switchView('experiments'));
+  $('manual-pilot').addEventListener('click', () => {
+    if (!state.data || state.data.period.end > state.data.source.coverage_end) return;
+    const group = state.data.segments.find((segment) => segment.id === 'promising' && segment.customers > 0) || state.data.segments.find((segment) => segment.customers > 0);
+    if (!group) return;
+    chooseDraft({ id: 'manual', title: 'A pilot you define', reason: 'Choose an observed customer group, a clear hypothesis, and an equal evaluation window. Review eligibility and consent before any assignment.', segment: group.id, customers: group.customers, metric: `${group.customers} identified customers`, suggestion: 'Write one specific change you want to test and why it might help this group.' });
+  });
+  $('refresh').addEventListener('click', load);
+  $('date-form').addEventListener('submit', (event) => { event.preventDefault(); load(); });
+  $('customer-search').addEventListener('input', renderCustomers); $('segment-filter').addEventListener('change', renderCustomers);
+  $('access-form').addEventListener('submit', (event) => { event.preventDefault(); state.token = $('access-token').value.trim(); $('access-token').value = ''; load(); });
+  $('lock-button').addEventListener('click', () => { state.controller?.abort(); state.sequence++; state.token = ''; clearData(); $('lock-button').hidden = true; $('access-panel').hidden = false; status('Workspace locked. Customer data has been cleared from view.'); });
+  $('ask-form').addEventListener('submit', ask); $('export-customers').addEventListener('click', exportCustomers);
+  function pilotCopyText() {
+    const pilot = state.pilotResult;
+    if (!pilot) return 'Pilot not calculated. No current audience split, offer-cost estimate, or feasibility check is attached. Calculate again after changing assumptions, dates, dataset, or view.';
+    const segmentLabel = state.data.segments.find((segment) => segment.id === pilot.segment)?.label || labels[pilot.segment] || pilot.segment;
+    const feasibility = !pilot.within_budget ? 'Exceeds the entered offer budget. Revise assumptions before considering a pilot.' : !pilot.feasible_pilot ? 'Not a feasible illustrative split; fewer than four observed customers may be available.' : 'Fits the entered offer budget and minimum illustrative audience. This does not establish statistical power, effectiveness, or complete operating cost.';
+    return [
+      'Calculated pilot assumptions:',
+      `Customer group: ${segmentLabel} (${pilot.segment})`,
+      `Proposed audience: ${integer(pilot.treatment_customers + pilot.holdout_customers)} customers; offer group ${integer(pilot.treatment_customers)}, holdout group ${integer(pilot.holdout_customers)}`,
+      `Offer per customer: ${money(pilot.offer_cents)} USD`,
+      `Offer budget: ${pilot.budget_cents === null ? 'Not specified' : `${money(pilot.budget_cents)} USD`}`,
+      `Maximum offer cost: ${money(pilot.maximum_offer_cost_cents)} USD`,
+      `Evaluation window: ${integer(pilot.window_days)} days for each group`,
+      `Observed source period: ${pilot.period.start} through ${pilot.period.end} (UTC)`,
+      `Source dataset: ${pilot.dataset_id}`,
+      `Source revision: ${pilot.source_revision}`,
+      `Feasibility: ${feasibility}`,
+      `Method: ${pilot.method}`,
+      `Success metric: ${pilot.success_metric}`,
+      ...(pilot.limitations || []).map((limitation) => `Limitation: ${limitation}`),
+    ].join('\n');
   }
-  function render() {
-    const sourceName = data.source === "nessie" ? "Nessie sandbox" : "Synthetic fixture";
-    const period = data.summary.start && data.summary.end ? dateLabel(data.summary.start) + " – " + dateLabel(data.summary.end) : "No transaction history";
-    $("source-badge").textContent = sourceName;
-    $("sync-title").textContent = "Snapshot loaded";
-    $("sync-account-name").textContent = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(data.as_of));
-    $("sync-dot").classList.remove("inactive");
-    $("period-caption").textContent = period + " · UTC dates";
-    $("overview-subheading").textContent = data.accounts.length + (data.accounts.length === 1 ? " account · " : " accounts · ") + data.transactions.length + " transactions in this period";
-    $("balance-value").textContent = money(data.cash_balance_cents);
-    const cashAccounts = data.accounts.filter((account) => ["Checking", "Savings"].includes(account.type)).length;
-    const creditAccounts = data.accounts.filter((account) => account.type === "Credit Card").length;
-    $("balance-foot").textContent = cashAccounts + " checking / savings " + (cashAccounts === 1 ? "account" : "accounts");
-    $("spend-value").textContent = money(data.summary.net_spending_cents);
-    $("spend-foot").textContent = data.summary.included_count + " completed expenses and refunds";
-    $("credit-value").textContent = money(data.credit_balance_cents);
-    $("credit-foot").textContent = creditAccounts ? "Amount owed across " + creditAccounts + " credit card " + (creditAccounts === 1 ? "account" : "accounts") : "No credit card accounts";
-    $("transaction-badge").textContent = String(data.transactions.length);
-    renderCategories();
-    renderMonths();
-    renderActivity();
-    renderTransactions();
-    $("coverage-details").replaceChildren(
-      amountRow("Completed expenses", money(data.gross_spending_cents)),
-      amountRow("Refunds", "−" + money(data.refunds_cents)),
-      amountRow("Net spending", money(data.summary.net_spending_cents)),
-      amountRow("Included / excluded records", data.summary.included_count + " / " + data.summary.excluded_count),
-    );
-    const largest = data.expense_categories[0];
-    const share = largest && data.gross_spending_cents ? largest.amount_cents / data.gross_spending_cents * 100 : 0;
-    $("largest-category-title").textContent = largest ? label(largest.category) + " leads your expenses." : "No expenses in this period.";
-    $("largest-category-copy").textContent = largest ? money(largest.amount_cents) + " of completed expenses are in this category, before refunds." : "Try a wider date range to explore your spending.";
-    $("largest-category-share").textContent = share.toFixed(1) + "%";
-    $("refund-insight").textContent = money(data.refunds_cents);
-    $("pending-insight").textContent = String(data.transactions.filter((row) => row.status === "pending").length);
-    $("uncategorized-insight").textContent = money(data.expense_categories.find((row) => row.category === "uncategorized")?.amount_cents || 0);
-    $("recurring-list").replaceChildren();
-    data.recurring.forEach((item) => {
-      const row = node("div", undefined, "recurring-row");
-      const text = node("div");
-      text.append(node("strong", item.merchant), node("p", item.occurrences + " charges, about every " + item.interval_days + " days", "chart-note"));
-      row.append(text, node("strong", money(item.amount_cents)), node("span", "Candidate", "status needs-context"));
-      $("recurring-list").append(row);
-    });
-    if (!data.recurring.length) $("recurring-list").append(node("p", "No monthly recurring candidates found in this period.", "empty-state"));
-    $("report-total").textContent = money(data.summary.net_spending_cents);
-    $("report-period").textContent = period + " · " + sourceName;
-    $("report-categories").replaceChildren(...data.summary.categories.map((item) => amountRow(label(item.category), money(item.amount_cents))));
-    if (!data.summary.categories.length) $("report-categories").append(node("p", "No expense or refund activity in this period.", "empty-state"));
-    $("connection-source").textContent = sourceName;
-    $("connection-customer").textContent = data.customer_id || "No accounts returned";
-    $("connection-time").textContent = new Date(data.as_of).toLocaleString();
-    $("accounts-list").replaceChildren();
-    data.accounts.forEach((account) => {
-      const card = node("section", undefined, "panel");
-      card.append(node("span", account.type === "Credit Card" ? "▱" : "◈", "insight-icon green"), node("h2", account.nickname), node("p", account.type), node("p", money(account.balance_cents), "insight-number"), node("p", account.type === "Credit Card" ? "Current card balance; negative means credit." : "Current posted balance."));
-      $("accounts-list").append(card);
-    });
-  }
-  function isoDay(value) { return value.toISOString().slice(0, 10); }
-  $("date-button").addEventListener("change", () => {
-    const preset = $("date-button").value;
-    $("custom-date-form").classList.toggle("hidden", preset !== "custom");
-    $("date-error").textContent = "";
-    if (preset === "custom") return;
-    appliedPreset = preset;
-    const today = new Date(data?.as_of || Date.now());
-    if (preset === "all") range = {};
-    else if (preset === "month") range = { start: isoDay(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))), end: isoDay(today) };
-    else {
-      const start = new Date(today);
-      start.setUTCDate(start.getUTCDate() - 29);
-      range = { start: isoDay(start), end: isoDay(today) };
-    }
-    void refresh();
+  $('copy-draft').addEventListener('click', async () => {
+    if (!state.draft) return;
+    const text = `${state.draft.title}\n\nObservation: ${state.draft.reason}\n\nExperiment: ${$('draft-hypothesis').value}\n\nMeasurement: ${$('draft-measure').value}\n\n${pilotCopyText()}\n\nDraft only. No customer has been assigned or contacted, and no campaign has been launched.`;
+    try { await navigator.clipboard.writeText(text); setText('draft-status', 'Draft copied with its current calculation state. Nothing has been sent to customers.'); }
+    catch { setText('draft-status', 'Copy is unavailable in this browser. Select the draft text above to copy it manually.'); }
   });
-  $("custom-date-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const start = $("date-start").value;
-    const end = $("date-end").value;
-    if (!start || !end || start > end) {
-      $("date-error").textContent = "Choose a start date on or before the end date.";
-      return;
-    }
-    range = { start, end };
-    appliedPreset = "custom";
-    $("date-error").textContent = "";
-    $("custom-date-form").classList.add("hidden");
-    void refresh();
-  });
-  $("cancel-date-button").addEventListener("click", () => {
-    $("custom-date-form").classList.add("hidden");
-    $("date-button").value = appliedPreset;
-  });
-
-  function csvCell(value) {
-    // Preserve numeric cells; neutralize formulas in provider-supplied text.
-    const text = typeof value === "number" ? String(value) : String(value ?? "").replace(/^(\s*[=+\-@])/, "'$1");
-    return '"' + text.replaceAll('"', '""') + '"';
-  }
-  function download(rows, filename) {
-    const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const link = node("a");
-    link.href = url;
-    link.download = filename;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    message("CSV downloaded");
-  }
-  $("download-report").addEventListener("click", () => {
-    if (!data) return;
-    download([
-      ["Ledgerly spending report"], ["Source", data.source], ["Customer", data.customer_id],
-      ["Start (UTC)", data.summary.start], ["End (UTC)", data.summary.end], [],
-      ["Category", "Net spending (cents)", "Currency"],
-      ...data.summary.categories.map((row) => [row.category, row.amount_cents, "USD"]),
-      [], ["Gross expenses (cents)", data.gross_spending_cents], ["Refunds (cents)", data.refunds_cents],
-      ["Net spending (cents)", data.summary.net_spending_cents], ["Included records", data.summary.included_count],
-      ["Excluded records", data.summary.excluded_count],
-    ], "ledgerly-spending-" + (data.summary.end || "empty") + ".csv");
-  });
-  $("export-transactions").addEventListener("click", () => {
-    if (!data) return;
-    download([
-      ["ID", "Account", "Date (UTC)", "Merchant", "Description", "Category", "Type", "Status", "Amount (cents)", "Currency"],
-      ...filteredTransactions().map((row) => [row.id, row.account_id, row.occurred_at, row.merchant, row.description, row.category, row.kind, row.status, row.amount_cents, "USD"]),
-    ], "ledgerly-transactions-" + (data.summary.end || "empty") + ".csv");
-  });
-  void refresh();
+  load();
 })();

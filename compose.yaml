@@ -1,52 +1,26 @@
-x-generator: &generator
-  build:
-    context: .
-    target: data-generator
-  volumes:
-    - app-data:/app/.data
-    - ${APP_SETTINGS_FILE:-./settings.toml}:/app/settings.toml:ro
-  environment:
-    APP_SETTINGS_FILE: /app/settings.toml
-    NESSIE_API_KEY: ${NESSIE_API_KEY:-}
-  read_only: true
-  tmpfs:
-    - /tmp
-
+name: regulars-lab
 services:
-  data-init:
-    <<: *generator
-    entrypoint: ["python", "/app/docker/ensure_fixture.py"]
-    # Offline initialization needs no provider credentials.
-    environment: {}
-    restart: "no"
-
   backend:
     build:
       context: .
-      target: backend
+      target: merchant-backend
     mem_limit: 1g
     cpus: 1
     environment:
-      APP_SETTINGS_FILE: /app/settings.toml
-      NESSIE_API_KEY: ${NESSIE_API_KEY:-}
-      APP_API_TOKEN: ${APP_API_TOKEN:-}
-      PHOTON_API_KEY: ${PHOTON_API_KEY:-}
-      PHOTON_WEBHOOK_SECRET: ${PHOTON_WEBHOOK_SECRET:-}
+      OWNER_API_TOKEN: ${OWNER_API_TOKEN:-}
+      OWNER_DATA_DIR: /app/.data
+      OWNER_AI_ENABLED: ${OWNER_AI_ENABLED:-false}
+      OWNER_AI_PROVIDER: ${OWNER_AI_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:8785:8765"
     volumes:
-      - app-data:/app/.data
-      - ${APP_SETTINGS_FILE:-./settings.toml}:/app/settings.toml:ro
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
+      - owner-data:/app/.data
     read_only: true
     tmpfs:
       - /tmp
     init: true
-
   frontend:
     build:
       context: .
@@ -55,35 +29,29 @@ services:
     mem_limit: 128m
     cpus: 0.5
     ports:
-      - "127.0.0.1:5173:8080"
+      - "127.0.0.1:5193:8080"
     depends_on:
       backend:
         condition: service_healthy
     read_only: true
     tmpfs:
       - /tmp
-
-  generator:
-    <<: *generator
-    profiles: ["tools"]
-
   backend-tests:
     build:
       context: .
-      target: backend-tests
-    profiles: ["tools"]
+      target: merchant-tests
+    profiles: [tools]
     mem_limit: 1g
     cpus: 1
     read_only: true
     tmpfs:
       - /tmp
-
   dashboard-tests:
     build:
       context: .
       dockerfile: apps/frontend/Dockerfile
       target: dashboard-tests
-    profiles: ["tools"]
+    profiles: [tools]
     mem_limit: 512m
     cpus: 1
     read_only: true
@@ -92,6 +60,37 @@ services:
     environment:
       npm_config_cache: /tmp/npm-cache
       NODE_OPTIONS: --max-old-space-size=256
-
+  nessie-import:
+    build:
+      context: .
+      target: merchant-importer
+    profiles: [tools]
+    environment:
+      NESSIE_API_KEY: ${NESSIE_API_KEY:-}
+      OWNER_DATA_DIR: /app/.data
+    volumes:
+      - owner-data:/app/.data
+    mem_limit: 512m
+    cpus: 1
+    read_only: true
+    tmpfs:
+      - /tmp
+    init: true
+  browser-tests:
+    build:
+      context: .
+      dockerfile: docker/browser.Dockerfile
+    profiles: [tools]
+    environment:
+      FRONTEND_URL: http://frontend:8080
+    volumes:
+      - ./.data/browser-artifacts:/artifacts
+    mem_limit: 1g
+    cpus: 1
+    shm_size: 256m
+    init: true
+    depends_on:
+      frontend:
+        condition: service_healthy
 volumes:
-  app-data:
+  owner-data:

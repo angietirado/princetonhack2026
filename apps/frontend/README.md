@@ -1,3 +1,5 @@
+> Legacy reference for the inherited consumer dashboard and React scaffold. Regulars serves the root HTML/JavaScript through Docker; use the [current root README](../../README.md) and merchant API at /api/v1/owner/*.
+
 # Frontend handoff
 
 This directory retains a minimal React + TypeScript + Vite source scaffold. The default Docker frontend serves the connected Ledgerly dashboard from the repository's root `index.html`, `app.js`, and `styles.css`. Its charts, balances, tables, and reports load FastAPI's unified dashboard response.

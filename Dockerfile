@@ -49,3 +49,19 @@ EXPOSE 8765
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2).close()"]
 CMD ["uvicorn", "spending_api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8765"]
+
+# Regulars uses the retained Python environment but a separate merchant domain.
+FROM backend-tests AS merchant-tests
+COPY scripts/import_merchant_nessie.py scripts/import_merchant_nessie.py
+COPY scripts/smoke_owner.py scripts/smoke_owner.py
+CMD ["/app/.venv/bin/pytest", "-q", "-p", "no:cacheprovider", "tests/test_merchant.py", "tests/test_merchant_import.py", "tests/test_merchant_compare.py", "tests/test_merchant_ai.py", "tests/test_merchant_api_import.py", "tests/test_merchant_experiments.py", "tests/test_merchant_nessie.py"]
+
+FROM backend AS merchant-backend
+COPY scripts/smoke_owner.py /app/scripts/smoke_owner.py
+CMD ["uvicorn", "spending_api.merchant_main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8765"]
+
+
+
+FROM merchant-backend AS merchant-importer
+COPY scripts/import_merchant_nessie.py /app/scripts/import_merchant_nessie.py
+ENTRYPOINT ["python", "/app/scripts/import_merchant_nessie.py"]

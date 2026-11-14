@@ -1,13 +1,15 @@
-{
-  "name": "ledgerly-dashboard",
-  "version": "0.1.0",
-  "private": true,
-  "engines": { "node": ">=22.12.0" },
-  "scripts": {
-    "start": "node scripts/serve_dashboard.cjs",
-    "test": "node --test tests/dashboard.test.cjs"
-  },
-  "devDependencies": {
-    "jsdom": "26.1.0"
-  }
+﻿{
+    "name":  "regulars-dashboard",
+    "version":  "0.1.0",
+    "private":  true,
+    "engines":  {
+                    "node":  "\u003e=22.12.0"
+                },
+    "scripts":  {
+                    "start":  "node scripts/serve_dashboard.cjs",
+                    "test":  "node --test tests/dashboard.test.cjs"
+                },
+    "devDependencies":  {
+                            "jsdom":  "26.1.0"
+                        }
 }
