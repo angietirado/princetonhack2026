@@ -242,5 +242,3 @@ def register_financial_routes(app, store, catalog):
             "This is the session's frozen financial context; no bank balance is changed."
         )
         return {"profile": profile, "summary": summary, "notice": notice}
-
-

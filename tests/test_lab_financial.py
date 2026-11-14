@@ -299,4 +299,3 @@ def test_optimizer_additional_cap_requires_nonnegative_integer_cents(scenario, c
     from spending_api.lab_engine import recommend
     with pytest.raises(ValueError):
         recommend(scenario, scenario["defaults"], cost_cap_cents=cap)
-

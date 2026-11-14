@@ -19,13 +19,14 @@ async function noPageOverflow(page) {
   const sizes = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth }));
   expect(sizes.page, JSON.stringify(sizes)).toBeLessThanOrEqual(sizes.viewport + 1);
 }
-async function startDemo(page, { budget = '70', time = '90', stops = '2' } = {}) {
+async function startDemo(page, { budget = '70', time = '90', stops = '2', wallet } = {}) {
   await page.goto(participant + '/?demo=1');
   await expect(page.locator('#setup')).toBeVisible();
   await expect(page.locator('#demo-notice')).toBeVisible();
   await page.locator('#setup-budget').fill(budget);
   await page.locator('#setup-time').fill(time);
   await page.locator('#setup-stops').selectOption(stops);
+  if (wallet) await page.getByRole('combobox', { name: /^Financial context/ }).selectOption(wallet);
   await page.locator('#consent').check();
   const created = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/sessions' && response.request().method() === 'POST');
   await page.getByRole('button', { name: /Start my challenge/ }).click();
@@ -293,8 +294,59 @@ test('chat proposes limits without applying or saving until explicit actions', a
   await expect(page.locator('#chat-history .chat-message')).toHaveCount(2);
   await expect(page.locator('#chat-history')).toContainText('one store only');
   await expect(page.locator('#active-stops')).toHaveValue('1');
-  await expect(page.locator('#chat-proposal-summary')).toContainText('Last suggested limits');
+  await expect(page.locator('#chat-proposal-summary')).toContainText('Restored guide limits');
   await noPageOverflow(page);
   expect((await getChoices()).length).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test('tight fictional wallet limits recommendations without overwriting the chosen budget', async ({ page, request }) => {
+  const errors = observe(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  const session = await startDemo(page, { wallet: 'tight' });
+  expect(session.scenario.financial_context.profile_id).toBe('tight');
+  expect(session.scenario.financial_context.snapshot.source).toBe('fixture');
+  await expect(page.locator('#active-budget')).toHaveValue('70.00');
+  await expect(page.locator('#wallet-summary')).toBeVisible();
+  await expect(page.locator('#active-wallet-checking')).toContainText('140');
+  await expect(page.locator('#active-wallet-bills')).toContainText('110');
+  await expect(page.locator('#active-wallet-capacity')).toContainText('30');
+  await chooseWholeStore(page);
+  await expect(page.locator('#plan-state')).toHaveText('Outside your limits');
+  const initial = await saveChoice(page);
+  expect(initial.evaluation.feasible).toBe(false);
+  expect(initial.evaluation.wallet.summary.spendable_now_cents).toBe(3000);
+  expect(initial.evaluation.wallet.after_choice.local_spending_cents).toBe(initial.evaluation.total_cost_cents);
+  await expect(page.locator('#recommendation-cards article')).toHaveCount(0);
+  const response = page.waitForResponse(res => /\/chat$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST');
+  await page.getByRole('textbox', { name: 'Ask the shopping guide', exact: true }).fill('budget $500');
+  await page.getByRole('button', { name: /Ask the guide/ }).click();
+  const chat = await (await response).json();
+  expect(chat.plans).toEqual([]);
+  await expect(page.locator('#active-budget')).toHaveValue('70.00');
+  await chooseWholeStore(page, 'Grove Grocer');
+  const revision = await saveChoice(page);
+  expect(revision.evaluation.wallet.after_choice.local_spending_cents).toBe(revision.evaluation.total_cost_cents);
+  expect(revision.evaluation.wallet.summary.spendable_now_cents).toBe(3000);
+  await page.reload();
+  await expect(page.locator('#active-wallet-capacity')).toContainText('30');
+  await expect(page.locator('#wallet-after-choice')).toBeVisible();
+  const frozen = await (await request.get(backend + '/api/v1/sessions/' + session.id + '/wallet', { headers: { Authorization: 'Bearer ' + session.token } })).json();
+  expect(frozen.summary.spendable_now_cents).toBe(3000);
+  await noPageOverflow(page);
+  await capture(page, '/artifacts/participant-wallet-mobile.png');
+  expect(errors).toEqual([]);
+});
+
+test('unavailable optional wallets do not block a budget-only challenge', async ({ page }) => {
+  const errors = observe(page);
+  await page.route('**/api/v1/wallets', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Wallet options are temporarily unavailable.' }) }));
+  const session = await startDemo(page);
+  expect(session.scenario.financial_context).toBeUndefined();
+  await expect(page.locator('#wallet-summary')).toBeHidden();
+  await chooseWholeStore(page);
+  const initial = await saveChoice(page);
+  expect(initial.evaluation.feasible).toBe(true);
+  await expect(page.locator('#recommendation-cards article')).not.toHaveCount(0);
   expect(errors).toEqual([]);
 });

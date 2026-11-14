@@ -7,7 +7,7 @@
   const CHAT_PENDING_KEY = "blockwise.chat-pending.v1";
   const colors = ["#d5ee87", "#d0dfc4", "#edd4b7", "#c4d9da", "#e3c7b8"];
   const icons = { milk: "◒", eggs: "◉", bread: "▰", rice: "▤", chicken: "◈", apples: "●", greens: "❧", coffee: "▥" };
-  const state = { scenarios: [], scenario: null, session: null, token: "", constraints: null, assignments: {}, choices: [], evaluation: null, evaluating: false, saving: false, starting: false, epoch: 0, evalSequence: 0, recommendationSequence: 0, pending: {}, lastSavedKey: "", chatMessages: [], chatBusy: false, chatSequence: 0, chatProposal: null, chatPending: {} };
+  const state = { wallets: [], walletProfileId: "", walletLoading: false, walletSequence: 0, scenarios: [], scenario: null, session: null, token: "", constraints: null, assignments: {}, choices: [], evaluation: null, evaluating: false, saving: false, starting: false, epoch: 0, evalSequence: 0, recommendationSequence: 0, pending: {}, lastSavedKey: "", chatMessages: [], chatBusy: false, chatSequence: 0, chatProposal: null, chatPending: {} };
   const money = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
   const minutes = (value) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 1 }) + " min";
   const escape = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -124,6 +124,62 @@
     });
     chooseScenario(state.scenario?.id || state.scenarios[0]?.id);
   }
+  function walletAmount(value) { return Number.isSafeInteger(value) ? money(value) : "Not available"; }
+  function renderWalletSelection() {
+    const wallet = state.wallets.find((item) => item.id === state.walletProfileId);
+    $("wallet-profile").value = wallet?.id || "";
+    $("wallet-profile").disabled = state.starting || state.walletLoading || !state.wallets.length;
+    $("setup-wallet-context").hidden = !wallet;
+    if (!wallet) return;
+    $("setup-wallet-description").textContent = wallet.description || wallet.name;
+    $("setup-wallet-checking").textContent = walletAmount(wallet.available_cents);
+    $("setup-wallet-bills").textContent = walletAmount(wallet.scheduled_obligations_cents);
+    $("setup-wallet-capacity").textContent = walletAmount(wallet.spendable_now_cents);
+  }
+  async function loadWallets() {
+    if (state.walletLoading) return;
+    const sequence = ++state.walletSequence;
+    state.walletLoading = true; $("wallet-retry").hidden = true;
+    $("wallet-status").textContent = "Loading optional wallet profiles…"; renderWalletSelection();
+    try {
+      const result = await api("/wallets", { token: "" });
+      if (sequence !== state.walletSequence) return;
+      if (!Array.isArray(result.wallets) || result.wallets.some((item) => !item || typeof item.id !== "string" || !item.id || typeof item.name !== "string" || item.source !== "fixture") || new Set(result.wallets.map((item) => item.id)).size !== result.wallets.length) throw new Error("The optional wallet profiles could not be verified.");
+      state.wallets = result.wallets;
+      $("wallet-profile").replaceChildren(new Option("Choose your own budget (no wallet)", ""));
+      state.wallets.forEach((item) => $("wallet-profile").append(new Option(item.name, item.id)));
+      if (!state.wallets.some((item) => item.id === state.walletProfileId)) state.walletProfileId = "";
+      $("wallet-status").textContent = state.wallets.length ? "Fictional examples created for this experiment; no live bank connection." : "No optional wallet profiles are available. You can still start with your own budget.";
+      $("wallet-retry").hidden = Boolean(state.wallets.length);
+    } catch (error) {
+      if (sequence !== state.walletSequence) return;
+      $("wallet-status").textContent = "Optional wallet profiles are unavailable. You can still start with your own budget. " + error.message;
+      $("wallet-retry").hidden = false;
+    } finally {
+      if (sequence === state.walletSequence) { state.walletLoading = false; renderWalletSelection(); }
+    }
+  }
+  function renderWalletContext(verifiedProjection) {
+    const context = state.scenario?.financial_context;
+    $("wallet-summary").hidden = !context;
+    if (!context) return;
+    const projection = verifiedProjection || context.projection || {};
+    $("wallet-heading").textContent = context.snapshot?.source === "fixture" ? "Fictional wallet" : "Saved wallet context";
+    $("active-wallet-description").textContent = context.profile_name || context.description || "Saved financial context";
+    $("active-wallet-checking").textContent = walletAmount(projection.baseline_available_cents);
+    $("active-wallet-bills").textContent = walletAmount(projection.scheduled_obligations_cents);
+    $("active-wallet-capacity").textContent = projection.status === "ready" ? walletAmount(projection.spendable_now_cents) : "Needs review";
+    renderWalletPreview();
+  }
+  function renderWalletPreview(evaluation) {
+    if (!state.scenario?.financial_context) return;
+    const target = $("wallet-after-choice"), after = evaluation?.wallet?.after_choice;
+    target.classList.remove("over-text");
+    if (!evaluation) { target.textContent = "Complete your basket to preview this one decision."; return; }
+    if (!after || after.status !== "ready" || after.local_spending_cents !== evaluation.total_cost_cents || !Number.isSafeInteger(after.spendable_now_cents) || !Number.isSafeInteger(after.ending_available_cents)) { target.textContent = "Wallet preview is unavailable or needs review for this plan."; return; }
+    target.textContent = "After this one shop: " + money(after.spendable_now_cents) + " shopping capacity left; " + money(after.ending_available_cents) + " modeled cash at the end of the example week.";
+    if (Number.isSafeInteger(after.shortfall_cents) && after.shortfall_cents > 0) { target.textContent += " Cash shortfall: " + money(after.shortfall_cents) + "."; target.classList.add("over-text"); }
+  }
   function storeName(id) { return id === "home" ? "Home" : state.scenario.stores.find((s) => s.id === id)?.name || "Store"; }
   function renderStores() {
     $("store-cards").replaceChildren();
@@ -170,7 +226,7 @@
     $("save-choice").disabled = !state.evaluation || state.evaluating || state.saving || state.lastSavedKey === draftKey();
   }
   function clearEvaluation() {
-    state.evaluation = null;
+    state.evaluation = null; renderWalletPreview();
     ["total-cost", "total-time", "basket-cost", "transport-cost", "time-breakdown"].forEach((id) => $(id).textContent = "—");
     $("money-meter").style.width = "0"; $("time-meter").style.width = "0";
     $("money-meter").parentElement.classList.remove("over"); $("time-meter").parentElement.classList.remove("over");
@@ -191,14 +247,15 @@
     $("basket-cost").textContent = money(e.basket_cost_cents); $("transport-cost").textContent = money(e.transport_cost_cents);
     $("time-breakdown").textContent = minutes(e.travel_minutes) + " / " + minutes(e.shopping_minutes);
     const remainingMoney = state.constraints.budget_cents - e.total_cost_cents, remainingTime = state.constraints.time_budget_minutes - e.total_minutes;
-    $("money-remaining").textContent = remainingMoney >= 0 ? money(remainingMoney) + " left from " + money(state.constraints.budget_cents) : money(-remainingMoney) + " over your budget";
+    $("money-remaining").textContent = remainingMoney >= 0 ? money(remainingMoney) + " under your chosen " + money(state.constraints.budget_cents) + " budget" : money(-remainingMoney) + " over your budget";
     $("time-remaining").textContent = remainingTime >= 0 ? minutes(remainingTime) + " left from " + minutes(state.constraints.time_budget_minutes) : minutes(-remainingTime) + " over your time limit";
     [["money", e.total_cost_cents / state.constraints.budget_cents, remainingMoney], ["time", e.total_minutes / state.constraints.time_budget_minutes, remainingTime]].forEach(([name, ratio, left]) => { $(name + "-meter").style.width = Math.min(100, ratio * 100) + "%"; $(name + "-meter").parentElement.classList.toggle("over", left < 0); $(name + "-remaining").classList.toggle("over-text", left < 0); });
     $("plan-state").textContent = e.feasible ? "Within your limits" : "Outside your limits";
     $("plan-heading").textContent = e.feasible ? "This could work." : "Something has to give.";
     $("route-display").textContent = e.route.map(storeName).join(" → ");
     notice("evaluation-error", e.feasible ? "" : e.violations.join(" ") + " You can still save this as your choice in the experiment.");
-    renderMap("active-map", state.scenario, e.route); renderProgress();
+    if (e.wallet?.summary) renderWalletContext(e.wallet.summary);
+    renderWalletPreview(e); renderMap("active-map", state.scenario, e.route); renderProgress();
   }
   function draftChanged() {
     state.evalSequence++; state.evaluation = null; state.evaluating = false;
@@ -236,7 +293,7 @@
     $("source-world").textContent = worldContext(state.scenario);
     $("source-notes").replaceChildren();
     Object.values(state.scenario.provenance || {}).forEach((text) => { const p = document.createElement("p"); p.textContent = text; $("source-notes").append(p); });
-    renderStores(); renderBasket(); renderMap("active-map", state.scenario); clearEvaluation();
+    renderWalletContext(); renderStores(); renderBasket(); renderMap("active-map", state.scenario); clearEvaluation();
     $("recommendations-section").hidden = !state.choices.some((c) => c.stage === "initial");
     if (complete()) evaluate();
     if (state.choices.some((c) => c.stage === "initial")) { recommendations(); loadChat(); } else { $("chat-section").hidden = true; }
@@ -248,15 +305,16 @@
     try { constraints = readFields("setup"); } catch (error) { $("start-status").textContent = error.message; return; }
     if (!state.scenario) return;
     const body = { scenario_id: state.scenario.id, constraints, is_demo: requestedDemo, consent: true };
+    if (state.walletProfileId) body.wallet_profile_id = state.walletProfileId;
     body.request_id = pendingId("create:" + JSON.stringify(body));
-    state.starting = true; $("start-button").disabled = true; $("start-status").textContent = "Preparing your challenge…";
+    state.starting = true; renderWalletSelection(); $("start-button").disabled = true; $("start-status").textContent = "Preparing your challenge…";
     try {
       const session = await api("/sessions", { method: "POST", body, token: "" });
       if (!session.id || !session.token || !session.scenario?.basket) throw new Error("Your session could not be verified. Please try again.");
       state.epoch++; state.session = session; state.token = session.token; state.scenario = session.scenario; state.constraints = session.constraints; state.assignments = {}; state.choices = session.choices || []; state.lastSavedKey = "";
       clearPending(); persist(); $("start-status").textContent = ""; renderChallenge(); $("main").scrollIntoView?.({ behavior: "smooth" });
     } catch (error) { $("start-status").textContent = error.message; }
-    finally { state.starting = false; $("start-button").disabled = false; }
+    finally { state.starting = false; renderWalletSelection(); $("start-button").disabled = false; }
   }
   async function saveChoice() {
     if (state.saving || !state.evaluation || state.evaluating || state.lastSavedKey === draftKey()) return;
@@ -292,7 +350,8 @@
       const result = await api("/sessions/" + encodeURIComponent(state.session.id) + "/recommendations", { method: "POST", body: { constraints: copy(state.constraints) } });
       if (sequence !== state.recommendationSequence || epoch !== state.epoch) return;
       if (!Array.isArray(result.plans) || result.plans.some((p) => !validEvaluation(p) || !p.feasible)) throw new Error("We could not verify these alternatives. Please refresh the options.");
-      if (result.status === "no_feasible_plan" || !result.plans.length) notice("recommendations-status", "No complete shopping plan fits all your current limits. Open Your limits to allow more time, a larger budget, or another store. We will keep your original choice.");
+      if (result.status === "needs_review") notice("recommendations-status", "Your saved financial context needs review, so verified shopping options are unavailable. Your original choice remains saved.");
+      else if (result.status === "no_feasible_plan" || !result.plans.length) notice("recommendations-status", "No complete shopping plan fits all your current limits. " + (state.scenario.financial_context ? "Your wallet's cash cap is separate from your chosen budget; increasing that budget does not increase the cash cap. " : "Open Your limits to allow more time, a larger budget, or another store. ") + "We will keep your original choice.");
       else notice("recommendations-status", "");
       result.plans.forEach((plan) => {
         const card = document.createElement("article"); card.className = "recommendation-card";
@@ -336,7 +395,7 @@
     $("chat-proposal").hidden = !state.chatProposal;
     $("chat-plan-options").replaceChildren();
     if (!state.chatProposal) return;
-    $("chat-proposal-summary").textContent = (restored ? "Last suggested limits: " : "") + money(constraints.budget_cents) + " budget · " + minutes(constraints.time_budget_minutes) + " whole trip · " + (constraints.travel_mode === "walk" ? "walking" : "driving") + " · " + constraints.max_stores + (constraints.max_stores === 1 ? " store maximum" : " stores maximum");
+    $("chat-proposal-summary").textContent = (restored ? "Restored guide limits: " : "") + money(constraints.budget_cents) + " budget · " + minutes(constraints.time_budget_minutes) + " whole trip · " + (constraints.travel_mode === "walk" ? "walking" : "driving") + " · " + constraints.max_stores + (constraints.max_stores === 1 ? " store maximum" : " stores maximum");
     plans.forEach((plan) => {
       const button = document.createElement("button"); button.type = "button"; button.className = "chat-plan-option";
       const text = document.createElement("span"), title = document.createElement("strong"), detail = document.createElement("small"), action = document.createElement("span");
@@ -423,6 +482,7 @@
     if (state.saving || state.starting) return;
     if (Object.keys(state.assignments).length && !window.confirm("Start a new challenge? Saved choices stay in the experiment; this browser will leave the current session.")) return;
     state.epoch++; state.evalSequence++; state.recommendationSequence++; state.chatSequence++;
+    state.walletProfileId = ""; renderWalletSelection();
     state.session = null; state.token = ""; state.assignments = {}; state.choices = []; state.evaluation = null; state.constraints = null; state.evaluating = false; state.saving = false; state.lastSavedKey = "";
     storageWrite(STORE_KEY, null); clearPending(); state.chatMessages = []; state.chatProposal = null; state.chatPending = {}; chatBusy(false); $("chat-input").value = ""; $("chat-proposal").hidden = true; $("chat-history").replaceChildren(); $("chat-status").textContent = "";
     $("challenge").hidden = true; $("setup").hidden = false; $("how-link").hidden = false; $("saved-result").hidden = true; $("consent").checked = false;
@@ -434,7 +494,7 @@
     try {
       const result = await api("/scenarios", { token: "" });
       if (!Array.isArray(result.scenarios) || !result.scenarios.length) throw new Error("No shopping scenarios are available yet. Please try again shortly.");
-      state.scenarios = result.scenarios; renderScenarios();
+      state.scenarios = result.scenarios; renderScenarios(); loadWallets();
       const stored = storageRead(STORE_KEY);
       if (stored?.id && stored?.token) {
         try {
@@ -453,6 +513,12 @@
     } catch (error) { notice("global-error", error.message); $("reload").hidden = false; }
     finally { $("loading").hidden = true; }
   }
+  $("wallet-profile").addEventListener("change", () => {
+    if (state.starting) { renderWalletSelection(); return; }
+    state.walletProfileId = state.wallets.some((item) => item.id === $("wallet-profile").value) ? $("wallet-profile").value : "";
+    renderWalletSelection();
+  });
+  $("wallet-retry").addEventListener("click", loadWallets);
   $("start-form").addEventListener("submit", start);
   $("limits-form").addEventListener("submit", applyLimits);
   $("save-choice").addEventListener("click", saveChoice);

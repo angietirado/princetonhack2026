@@ -29,9 +29,18 @@ function evaluation(assignments = { milk: "corner", bread: "corner" }, limits = 
 function boot(t, options = {}) {
   const calls = [], choices = [], errors = [], chatHistory = clone(options.chatHistory || []);
   const scenarios = clone(options.scenarios || [scenario()]);
+  const wallets = clone(options.wallets || walletProfiles());
   const chatReplies = new Map(); let chatConstraints = clone(constraints);
   let sequence = 0;
   const serverSession = { id: "session-1", token: "scoped-session-token", scenario: clone(options.snapshot || scenarios[0]), constraints: clone(constraints), is_demo: false, created_at: "2026-11-14T12:00:00Z", choices };
+  function sessionEvaluation(assignments, limits) {
+    const result = evaluation(assignments, limits), context = serverSession.scenario.financial_context;
+    if (!context) return result;
+    const summary = clone(context.projection), left = summary.spendable_now_cents - result.total_cost_cents;
+    result.wallet = { summary, after_choice: { ...summary, local_spending_cents: result.total_cost_cents, spendable_now_cents: Math.max(0, left), ending_available_cents: left, shortfall_cents: Math.max(0, -left) } };
+    if (left < 0) { result.violations.push("The trip exceeds the wallet cash cap."); result.feasible = false; }
+    return result;
+  }
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (e) => errors.push(e));
   const dom = new JSDOM(html, { url: options.url || "http://localhost:5183/", runScripts: "outside-only", virtualConsole });
@@ -42,8 +51,9 @@ function boot(t, options = {}) {
   if (options.initial) choices.push(clone(options.initial));
   const defaultHandler = async (url, request) => {
     const body = request.body ? JSON.parse(request.body) : null;
+    if (url === "/api/v1/wallets") return response({ wallets, notice: "Fictional local fixtures." });
     if (url === "/api/v1/scenarios") return response({ scenarios, simulation_notice: "Simulation." });
-    if (url === "/api/v1/sessions") { serverSession.scenario = clone(scenarios.find((item) => item.id === body.scenario_id) || serverSession.scenario); serverSession.constraints = body.constraints; serverSession.is_demo = body.is_demo; return response(serverSession); }
+    if (url === "/api/v1/sessions") { serverSession.scenario = clone(scenarios.find((item) => item.id === body.scenario_id) || serverSession.scenario); if (body.wallet_profile_id) serverSession.scenario.financial_context = walletContext(wallets.find((item) => item.id === body.wallet_profile_id)); serverSession.constraints = body.constraints; serverSession.is_demo = body.is_demo; return response(serverSession); }
     if (request.headers.Authorization !== "Bearer scoped-session-token") return response({ detail: "Not authorized" }, 401);
     if (url === "/api/v1/sessions/session-1") return response(serverSession);
     if (url.endsWith("/chat")) {
@@ -55,22 +65,22 @@ function boot(t, options = {}) {
       else if (body.message === "under 30 minutes") chatConstraints.time_budget_minutes = 30;
       else if (body.message === "budget $60") chatConstraints.budget_cents = 6000;
       else status = "clarification";
-      const plan = evaluation({ milk: "value", bread: "value" }, chatConstraints);
+      const plan = sessionEvaluation({ milk: "value", bread: "value" }, chatConstraints);
       const reply = status === "clarification" ? "Please give a specific budget, time, travel, or stop limit." : "Here are your options with those limits. Apply a proposal when ready.";
       const result = { reply, mode: "offline", constraints: clone(chatConstraints), plans: status === "ok" && plan.feasible ? [{ ...plan, id: "chat-plan", label: "Lowest cost" }] : [], status, notice: "Suggestions do not save choices." };
       chatHistory.push({ role: "user", content: body.message }, { role: "assistant", content: reply });
       chatReplies.set(body.request_id, clone(result));
       return response(result);
     }
-    if (url.endsWith("/evaluate")) return response(evaluation(body.assignments, body.constraints));
+    if (url.endsWith("/evaluate")) return response(sessionEvaluation(body.assignments, body.constraints));
     if (url.endsWith("/choices")) {
       const existing = choices.find((c) => c.request_id === body.request_id);
       if (existing) return response(existing);
-      const choice = { id: "choice-" + ++sequence, request_id: body.request_id, stage: body.stage, evaluation: evaluation(body.assignments, body.constraints), created_at: "2026-11-14T12:00:00Z" };
+      const choice = { id: "choice-" + ++sequence, request_id: body.request_id, stage: body.stage, evaluation: sessionEvaluation(body.assignments, body.constraints), created_at: "2026-11-14T12:00:00Z" };
       choices.push(choice); return response(choice);
     }
     if (url.endsWith("/recommendations")) {
-      const plan = evaluation({ milk: "value", bread: "value" }, body.constraints);
+      const plan = sessionEvaluation({ milk: "value", bread: "value" }, body.constraints);
       return response({ status: plan.feasible ? "ok" : "no_feasible_plan", plans: plan.feasible ? [{ ...plan, id: "plan-1", label: "Lowest cost" }] : [], evaluated_plan_count: 6, feasible_plan_count: plan.feasible ? 4 : 0, notice: "Simulated prices and travel." });
     }
     throw new Error("Unexpected URL: " + url);
@@ -91,7 +101,7 @@ test("setup never starts collection without consent and exposes simulation prove
   const app = boot(t); await tick();
   assert.equal(app.get("setup").hidden, false);
   assert.equal(app.get("challenge").hidden, true);
-  assert.equal(app.calls.length, 1);
+  assert.deepEqual(app.calls.map((call) => call.url).sort(), ["/api/v1/scenarios", "/api/v1/wallets"]);
   app.submit("start-form"); await tick();
   assert.match(app.get("start-status").textContent, /agree to save/);
   assert.equal(app.calls.some((c) => c.url === "/api/v1/sessions"), false);
@@ -370,4 +380,140 @@ test("absent and invalid rental metadata are omitted instead of displayed as zer
   await app.start();
   assert.equal(app.get("active-home-context").hidden, true);
   assert.doesNotMatch(app.get("source-home").textContent, /0 bedrooms|Studio/);
+});
+
+function walletProfiles() {
+  return [
+    { id: "steady", name: "Steady week", available_cents: 40000, scheduled_obligations_cents: 18000, spendable_now_cents: 22000 },
+    { id: "tight", name: "Tight week", available_cents: 14000, scheduled_obligations_cents: 11000, spendable_now_cents: 3000 },
+    { id: "buffer", name: "Building a buffer", available_cents: 60000, scheduled_obligations_cents: 24000, spendable_now_cents: 36000 },
+  ].map((item) => ({ ...item, source: "fixture", description: "An invented checking account and dated example bill.", snapshot_id: "fixture-" + item.id, shopping_allowance_cents: item.spendable_now_cents, reserve_cents: 0 }));
+}
+function walletContext(profile = walletProfiles()[1]) {
+  return { profile_id: profile.id, profile_name: profile.name, description: profile.description, snapshot: { source: "fixture", id: profile.snapshot_id }, projection_inputs: { days: 7, reserve_cents: 0, expected_income: [], events: [] }, projection: { status: "ready", baseline_available_cents: profile.available_cents, scheduled_obligations_cents: profile.scheduled_obligations_cents, spendable_now_cents: profile.spendable_now_cents, ending_available_cents: profile.spendable_now_cents, local_spending_cents: 0, shortfall_cents: 0, reserve_cents: 0 } };
+}
+function selectWallet(app, id) {
+  app.get("wallet-profile").value = id;
+  app.get("wallet-profile").dispatchEvent(new app.window.Event("change", { bubbles: true }));
+}
+
+test("wallet is optional by default and no profile is sent without an explicit choice", async (t) => {
+  const app = boot(t); await tick();
+  assert.equal(app.get("wallet-profile").value, "");
+  assert.equal(app.get("setup-wallet-context").hidden, true);
+  assert.match(app.get("wallet-status").textContent, /no live bank connection/);
+  await app.start();
+  const body = JSON.parse(app.calls.find((call) => call.url === "/api/v1/sessions").request.body);
+  assert.equal(Object.hasOwn(body, "wallet_profile_id"), false);
+  assert.equal(app.get("wallet-summary").hidden, true);
+  assert.equal(app.get("active-budget").value, "25.00");
+});
+
+test("explicit wallet selection shows cash after bills without changing the chosen budget", async (t) => {
+  const app = boot(t); await tick(); selectWallet(app, "tight");
+  assert.equal(app.get("setup-wallet-context").hidden, false);
+  assert.equal(app.get("setup-wallet-checking").textContent, "$140.00");
+  assert.equal(app.get("setup-wallet-bills").textContent, "$110.00");
+  assert.equal(app.get("setup-wallet-capacity").textContent, "$30.00");
+  assert.equal(app.get("setup-budget").value, "25.00");
+  assert.match(app.get("setup-wallet-context").textContent, /unused credit is excluded/);
+  await app.start();
+  const body = JSON.parse(app.calls.find((call) => call.url === "/api/v1/sessions").request.body);
+  assert.equal(body.wallet_profile_id, "tight");
+  assert.equal(body.constraints.budget_cents, 2500);
+  assert.equal(app.get("wallet-heading").textContent, "Fictional wallet");
+  assert.equal(app.get("active-wallet-checking").textContent, "$140.00");
+  assert.equal(app.get("active-wallet-bills").textContent, "$110.00");
+  assert.equal(app.get("active-wallet-capacity").textContent, "$30.00");
+  assert.match(app.get("wallet-after-choice").textContent, /Complete your basket/);
+});
+
+test("wallet preview counts one current decision and does not accumulate saved revisions", async (t) => {
+  const app = boot(t); await tick(); selectWallet(app, "tight"); await app.start(); await app.selectStore();
+  assert.match(app.get("wallet-after-choice").textContent, /After this one shop: \$18\.00/);
+  app.click("save-choice"); await tick(); await app.selectStore("value");
+  assert.match(app.get("wallet-after-choice").textContent, /After this one shop: \$19\.00/);
+  app.click("save-choice"); await tick();
+  assert.equal(app.choices.length, 2);
+  assert.match(app.get("wallet-after-choice").textContent, /\$19\.00/);
+  assert.equal(app.get("active-wallet-capacity").textContent, "$30.00");
+  assert.match(app.get("wallet-summary").textContent, /Saved revisions are alternatives, not extra purchases/);
+  app.get("active-budget").value = "100"; app.submit("limits-form"); await tick();
+  assert.equal(app.get("active-wallet-capacity").textContent, "$30.00");
+  assert.match(app.get("wallet-after-choice").textContent, /\$19\.00/);
+});
+
+test("wallet catalog failure permits the core challenge and retry never invents profiles", async (t) => {
+  let fail = true;
+  const app = boot(t, { handler: async (url, request, next) => url === "/api/v1/wallets" && fail ? response({ detail: "Catalog offline" }, 503) : next(url, request) }); await tick();
+  assert.equal(app.get("setup").hidden, false);
+  assert.equal(app.get("wallet-profile").options.length, 1);
+  assert.equal(app.get("wallet-profile").disabled, true);
+  assert.equal(app.get("wallet-retry").hidden, false);
+  assert.match(app.get("wallet-status").textContent, /still start with your own budget/);
+  await app.start();
+  assert.equal(app.get("challenge").hidden, false);
+  assert.equal(app.get("wallet-summary").hidden, true);
+  app.click("new-session"); fail = false; app.click("wallet-retry"); await tick();
+  assert.equal(app.get("wallet-profile").options.length, 4);
+  assert.equal(app.get("wallet-profile").value, "");
+  selectWallet(app, "buffer");
+  assert.equal(app.get("setup-wallet-capacity").textContent, "$360.00");
+});
+
+test("slow optional wallet loading does not block starting and cannot attach a wallet later", async (t) => {
+  let release;
+  const app = boot(t, { handler: async (url, request, next) => url === "/api/v1/wallets" ? new Promise((resolve) => { release = async () => resolve(await next(url, request)); }) : next(url, request) });
+  await app.start();
+  assert.equal(app.get("challenge").hidden, false);
+  assert.equal(app.get("wallet-summary").hidden, true);
+  await release(); await tick();
+  assert.equal(app.get("wallet-summary").hidden, true);
+  assert.equal(app.serverSession.scenario.financial_context, undefined);
+});
+
+test("lost session response retries preserve the explicitly chosen wallet and request id", async (t) => {
+  let lost = true;
+  const app = boot(t, { handler: async (url, request, next) => {
+    const result = await next(url, request);
+    if (url === "/api/v1/sessions" && lost) { lost = false; throw new Error("Lost create response"); }
+    return result;
+  } }); await tick(); selectWallet(app, "steady"); await app.start();
+  assert.equal(app.get("wallet-profile").value, "steady");
+  assert.match(app.get("start-status").textContent, /Lost create response/);
+  app.submit("start-form"); await tick();
+  const requests = app.calls.filter((call) => call.url === "/api/v1/sessions").map((call) => JSON.parse(call.request.body));
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].request_id, requests[1].request_id);
+  assert.equal(requests[0].wallet_profile_id, "steady");
+  assert.equal(requests[1].wallet_profile_id, "steady");
+  assert.equal(app.get("active-wallet-capacity").textContent, "$220.00");
+});
+
+test("resumed wallet uses the frozen session projection rather than a changed catalog", async (t) => {
+  const snapshot = scenario(); snapshot.financial_context = walletContext();
+  const catalog = walletProfiles(); catalog[1].spendable_now_cents = 99900;
+  const app = boot(t, { snapshot, wallets: catalog, stored: { id: "session-1", token: "scoped-session-token", constraints, assignments: {} } }); await tick();
+  assert.equal(app.get("challenge").hidden, false);
+  assert.equal(app.get("active-wallet-capacity").textContent, "$30.00");
+  assert.equal(app.get("active-wallet-checking").textContent, "$140.00");
+  assert.doesNotMatch(app.get("wallet-summary").textContent, /999/);
+  app.click("new-session");
+  assert.equal(app.get("wallet-profile").value, "");
+  assert.equal(app.get("setup-wallet-context").hidden, true);
+});
+
+test("unresolved wallet values stay unknown and a missing preview never reuses an earlier amount", async (t) => {
+  let review = false;
+  const app = boot(t, { handler: async (url, request, next) => {
+    const result = await next(url, request);
+    if (url.endsWith("/evaluate") && review) { const data = await result.json(); data.wallet = { summary: { status: "needs_review", baseline_available_cents: null, scheduled_obligations_cents: null, spendable_now_cents: null }, after_choice: null }; return response(data); }
+    return result;
+  } }); await tick(); selectWallet(app, "tight"); await app.start(); await app.selectStore();
+  assert.match(app.get("wallet-after-choice").textContent, /\$18\.00/);
+  review = true; await app.selectStore("value");
+  assert.equal(app.get("active-wallet-checking").textContent, "Not available");
+  assert.equal(app.get("active-wallet-capacity").textContent, "Needs review");
+  assert.match(app.get("wallet-after-choice").textContent, /unavailable or needs review/);
+  assert.doesNotMatch(app.get("wallet-after-choice").textContent, /\$18|\$0/);
 });

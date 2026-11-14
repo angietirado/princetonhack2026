@@ -81,4 +81,3 @@ Sources: [Nessie v2 OpenAPI](https://v2-prod-api.nessieisreal.com/openapi.json),
 Use the project's credential-free Docker workflow with --env-file .env.example. Regression coverage includes mocked Nessie reads, dollars/cents, credit and holds, time ordering, delayed income, missing bill links, immutable branches, wallet caps across interfaces, legacy request retries, and current-choice-only previews.
 
 The adapter has not been verified against live credentials during this work. No private .env contents were read or loaded for verification.
-
