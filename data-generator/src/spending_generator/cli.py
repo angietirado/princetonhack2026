@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import random
+import tomllib
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -116,11 +117,17 @@ def main():
                 )
             )
             return
-        load_dotenv()
+        load_dotenv(dotenv_path=Path(".env"), encoding="utf-8")
         key = os.getenv("NESSIE_API_KEY")
         if not key:
             parser.error("Set NESSIE_API_KEY in .env before using --apply")
-        base = os.getenv("NESSIE_BASE_URL", "https://v2-prod-api.nessieisreal.com")
+        settings_path = Path(os.getenv("APP_SETTINGS_FILE", "settings.toml"))
+        try:
+            with settings_path.open("rb") as source:
+                options = tomllib.load(source)
+            base = options.get("nessie_base_url", "https://v2-prod-api.nessieisreal.com")
+        except (OSError, tomllib.TOMLDecodeError):
+            parser.exit(1, "Read a valid settings.toml before creating Nessie data.\n")
         try:
             response = httpx.post(
                 f"{base.rstrip('/')}/simulations",

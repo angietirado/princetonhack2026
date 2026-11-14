@@ -1,96 +1,146 @@
 # Spending Companion
 
-A hackathon app for analyzing Nessie v2 spending through AI agents and phone conversations on Photon 2.0. FastAPI owns the backend; React is a deliberately small starting point for the frontend teammate. A separate Python package creates demo data.
+A hackathon app for analyzing Nessie v2 spending. The Ledgerly dashboard and terminal use the same pinned customer's backend data. Photon phone conversations are deferred. Docker Compose runs the dashboard, FastAPI backend, and separate data generator. A minimal React source scaffold remains in `apps/frontend`; the default dashboard is the root HTML/JavaScript application.
 
 The project plan and decision log live in [docs/DESIGN.md](docs/DESIGN.md). The [integration guide](docs/INTEGRATIONS.md) covers credentials and provider setup; the [frontend handoff](apps/frontend/README.md) describes the API contract.
 
-## What runs today
+## Quick start with Docker
 
-- FastAPI with accounts, transactions, spending summaries, recurring-charge candidates, and OpenAPI documentation.
-- Provider-neutral Python tools for agents, backed by deterministic calculations in integer cents.
-- A deterministic local data generator and an opt-in Nessie v2 historical simulation command.
-- A React + TypeScript + Vite page that displays data from the backend.
-- Photon 2.0 signature verification, sender filtering, a durable SQLite inbox, and an explicit outbound transport function.
+Docker is the default development workflow. Install and start Docker Desktop with Linux containers, or Docker Engine with Compose v2 or later. No host Python, uv, or Node.js installation is needed.
 
-AI orchestration and the inbox worker that sends replies are **not implemented yet**. The webhook queues events; it does not answer messages. External credentials are not included, and live Nessie/Photon calls have not been verified with an account.
-
-## Quick start on Windows
-
-Run from the repository root. Node.js 22.12+ is required. Bootstrap installs uv and Python 3.12 into ignored folders inside this checkout, installs locked dependencies, creates `.env` if missing, and generates the local fixture if missing.
-
-```powershell
-.\scripts\bootstrap.ps1
-```
-
-Start the backend:
-
-```powershell
-.\scripts\uv.ps1 run --package spending-api uvicorn spending_api.main:create_app --factory --reload --host 127.0.0.1 --port 8765
-```
-
-Start the frontend in a second terminal:
-
-```powershell
-cd apps/frontend
-npm run dev
-```
-
-Open `http://127.0.0.1:5173`. Interactive API documentation is at `http://127.0.0.1:8765/docs`.
-
-The `scripts/uv.ps1` wrapper keeps Python downloads and caches inside this repository. On a machine with uv installed, use `uv` in place of `.\scripts\uv.ps1` in every command below.
-
-## Quick start on macOS or Linux
-
-With [uv](https://docs.astral.sh/uv/getting-started/installation/) and Node.js 22.12+ installed:
+From the repository root, start all three components:
 
 ```sh
-uv sync --all-packages --locked
-cp -n .env.example .env
-uv run --package spending-data-generator generate-data
-cd apps/frontend
-npm ci
-npm run dev
+docker compose --env-file .env.example up --build --detach --wait
 ```
 
-Start the backend from the repository root in another terminal:
+Open the app at **http://127.0.0.1:5173** and API documentation at **http://127.0.0.1:8765/docs**. Ports 5173 and 8765 must be free. The first build downloads the required images and dependencies.
+
+This uses the credential-free `.env.example` and does not load your private `.env` file. The dashboard loads the generated fixture through FastAPI and labels it synthetic. For your pinned Nessie customer, start with `docker compose --env-file .env up --build --detach --wait` and enter your existing `APP_API_TOKEN` on the dashboard's unlock screen.
+
+## How the three components run
+
+| Component | Compose service | Startup behavior |
+| --- | --- | --- |
+| Data generator | `data-init` | Runs the generator package to create a missing demo fixture, then exits successfully. Existing data is preserved. |
+| FastAPI backend | `backend` | Starts after generation finishes and reads the shared data. Stays running on port 8765. |
+| Ledgerly dashboard | `frontend` | Starts after the backend is healthy. nginx serves the root `index.html`, `app.js`, and `styles.css` on port 5173, with proxy routes available for FastAPI. |
+
+**The generator is a one-shot job.** Seeing `data-init` with `Exited (0)` is expected; the backend and frontend continue running. No additional startup command is needed for generation.
+
+The `generator` service in the `tools` profile exposes the same package's CLI for intentional regeneration. It is separate from normal startup so restarting the app does not overwrite your data.
+
+Fixtures and the Photon SQLite inbox live in the `app-data` named volume at `/app/.data`. The volume is shared by the Python containers and is separate from the host's `.data` folder. nginx proxies the dashboard's `/api/v1/dashboard` request to FastAPI on the same origin. The backend returns one customer-scoped snapshot for all visualizations.
+
+## Everyday Docker commands
 
 ```sh
-uv run --package spending-api uvicorn spending_api.main:create_app --factory --reload --host 127.0.0.1 --port 8765
+# See running services and the completed generator job.
+docker compose --env-file .env.example ps --all
+
+# Follow application logs.
+docker compose --env-file .env.example logs -f backend frontend
+
+# Rebuild and restart after changing source code.
+docker compose --env-file .env.example up --build --detach --wait
+
+# Stop and remove containers while keeping generated data.
+docker compose --env-file .env.example down
 ```
+
+Source code is built into the images, so Docker changes take effect after rebuilding. `docker compose down` preserves the data volume.
 
 ## Generate demo data
 
-```powershell
-# Fix the end date as well as the seed for identical fixtures on every machine.
-.\scripts\uv.ps1 run --package spending-data-generator generate-data --seed 42 --days 90 --end-date 2026-11-13
+Run the generator inside Docker from the repository root. The first two commands intentionally replace the fixture in the shared volume:
 
-# A local scenario with higher dining spending in the last two weeks.
-.\scripts\uv.ps1 run --package spending-data-generator generate-data --scenario overspending
+```sh
+# Fix the end date as well as the seed for identical fixtures on every machine.
+docker compose --env-file .env.example --profile tools run --build --rm generator --seed 42 --days 90 --end-date 2026-11-13
+
+# A synthetic scenario with higher dining spending in the last two weeks.
+docker compose --env-file .env.example --profile tools run --build --rm generator --scenario overspending
 
 # Show the Nessie request without making it.
-.\scripts\uv.ps1 run --package spending-data-generator generate-data --target nessie
+docker compose --env-file .env.example --profile tools run --build --rm generator --target nessie
 ```
 
-The generator defaults to `.data/demo.json`. Local fixtures and `.env` are ignored by Git. Live generation requires an explicit `--apply`; see the integration guide before running it.
+The `--build` flag keeps the tools-profile image up to date. In fixture mode, the backend reads the updated fixture on its next request; use Refresh in the dashboard to display it. Nessie mode reads the pinned provider customer instead. Live Nessie generation requires your credential file and an explicit `--apply`; see the [integration guide](docs/INTEGRATIONS.md) first.
 
-## Check the project
+## Provider configuration
 
-```powershell
-.\scripts\uv.ps1 run --all-packages pytest -q
-cd apps/frontend
-npm run build
+Keep non-secret options in `settings.toml`, including `data_source`, `nessie_customer_id`, provider URLs, and `photon_enabled`. The MVP customer is pinned there; starting or restarting the app does not generate new Nessie data. Keep credentials such as `NESSIE_API_KEY` and `APP_API_TOKEN` in the ignored `.env`. Photon is disabled and needs no setup for the MVP.
+
+For a fresh clone, copy `.env.example` only if `.env` does not exist, fill the credentials, and remove its `APP_SETTINGS_FILE` selector to use `settings.toml`. `docker compose --env-file .env.example ...` intentionally mounts `settings.example.toml` instead, so automated checks stay offline. Read the [integration guide](docs/INTEGRATIONS.md) for the complete setup.
+
+To run with your configured provider settings, use `docker compose --env-file .env up --build --detach --wait`. Compose passes the relevant settings to the backend or generator at runtime. The frontend and offline initializer receive no provider keys. Re-run that command after configuration changes. `.env` is ignored by Git and excluded from Docker image builds; use the credential-free `.env.example` for shared configuration and validation.
+
+The settings file is mounted read-only into the backend and generator. Keep `fixture_path` and `photon_inbox_path` under `.data/` so container data persists in the shared volume. Provider credentials stay out of the frontend and image build context.
+
+## Terminal MVP
+
+After starting the configured stack, run these from the repository root:
+
+```sh
+docker compose --env-file .env.example exec -T backend python -m spending_api.terminal summary
+docker compose --env-file .env.example exec -T backend python -m spending_api.terminal recurring
+docker compose --env-file .env.example exec -T backend python -m spending_api.terminal accounts
+docker compose --env-file .env.example exec -T backend python -m spending_api.terminal transactions --limit 10
 ```
 
-GitHub Actions runs these checks for pushes and pull requests. Python dependencies are locked in `uv.lock`; frontend dependencies are locked in `apps/frontend/package-lock.json`. Ruff is available as a development tool for formatting and linting when needed.
+`exec` uses the running backend's mounted settings and runtime credentials; its `--env-file .env.example` does not switch that container to fixture mode. The commands use the pinned customer, return integer-cent amounts, and make no financial writes. Add `--start YYYY-MM-DD --end YYYY-MM-DD` to limit the transaction period. These are deterministic analysis commands; natural-language AI chat remains a later milestone.
+
+## What runs today
+
+- FastAPI with a unified dashboard snapshot, accounts, transactions, spending summaries, recurring-charge candidates, and OpenAPI documentation.
+- Provider-neutral Python tools for agents, backed by deterministic calculations in integer cents.
+- A deterministic data generator and an opt-in Nessie v2 historical simulation command.
+- The connected Ledgerly dashboard: cash/card balances, expense-category and monthly charts, date filters, searchable transactions, recurring candidates, and CSV exports.
+- Photon 2.0 signature verification, sender filtering, a durable SQLite inbox, and an explicit outbound transport function.
+
+AI orchestration and the inbox worker that sends replies are **not implemented yet**. Photon is disabled in the MVP settings; enabling its receiver later only queues events. The pinned Nessie customer comes from a completed 300-transaction historical simulation. Credentials are not committed.
+
+## Checks with Docker
+
+Run backend configuration/API tests and dashboard DOM regression tests inside Docker:
+
+```sh
+docker compose --env-file .env.example --profile tools run --build --rm backend-tests
+docker compose --env-file .env.example --profile tools run --build --rm dashboard-tests
+```
+
+With the stack running, check the served dashboard and API routes from inside Docker:
+
+```sh
+docker compose --env-file .env.example exec -T backend python scripts/smoke_docker.py --frontend-url http://frontend:8080 --backend-url http://127.0.0.1:8765
+```
+
+GitHub Actions runs backend tests, dashboard regression tests, and Docker smoke checks on pushes and pull requests. Docker checks cover HTTP routing, the standalone generator, and data persistence across container recreation. Dependencies are locked in `uv.lock`, root `package-lock.json`, and `apps/frontend/package-lock.json`.
+
+## Dashboard scope
+
+The root `index.html`, `app.js`, and `styles.css` contain the connected Ledgerly dashboard served by the `frontend` container. The React source in `apps/frontend` is retained as a scaffold and is not the default Docker page.
+
+The app token is kept only in page memory, sent in an Authorization header to the same-origin backend, and cleared on lock or reload. Provider keys never reach the browser. The customer stays fixed by `settings.toml`; there is no fake workspace switcher or bank-linking flow. Errors hide old figures instead of substituting sample data.
+
+All amounts are calculated in cents. The category donut shows completed expenses before refunds; monthly bars and reports show net spending after refunds. Current cash balances exclude credit card debt. UTC date filters affect transactions, not current balances. CSV exports preserve the selected period; transaction exports include all matching rows across pages. Recurring charges are labeled candidates. Tax deductions and AI answers are not inferred or fabricated.
+
+Docker is sufficient for running and checking the dashboard. [Optional native development](docs/LOCAL_DEVELOPMENT.md) is available for working on the Python and React scaffolds without containers.
 
 ## Repository map
 
 ```text
 apps/
   backend/src/spending_api/    FastAPI, read-only data adapter, agent tools, Photon boundary
-  frontend/                   Minimal React app; owned by the frontend teammate
+  frontend/                   React source scaffold and frontend Dockerfile
+index.html, app.js, styles.css Connected Ledgerly dashboard served by Docker
 data-generator/               Independent fixture and Nessie simulation CLI
-docs/                         Design, decisions, and integration instructions
-scripts/                      Repo-local Windows setup
-tests/                        Money calculations, scope, API, and webhook behavior
+compose.yaml                  Startup for all three components and shared storage
+settings.toml                 Readable runtime options and pinned Nessie customer
+settings.example.toml         Offline options used by credential-free checks
+Dockerfile                    Separate backend and generator image targets
+docker/                       Fixture initialization and nginx routing
+docs/                         Design, integration, and optional native setup
+scripts/                      Docker smoke checks and optional Windows setup
+tests/                        Dashboard interactions, money calculations, API, and webhooks
 ```

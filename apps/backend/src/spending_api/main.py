@@ -10,14 +10,22 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from standardwebhooks.webhooks import Webhook, WebhookVerificationError
 
 from spending_api.agent_tools import SpendingTools
-from spending_api.config import Settings
-from spending_api.models import Account, DateRange, RecurringCharge, SpendingSummary, Transaction
+from spending_api.config import Settings, load_settings
+from spending_api.dashboard import build_dashboard
+from spending_api.models import (
+    Account,
+    DashboardData,
+    DateRange,
+    RecurringCharge,
+    SpendingSummary,
+    Transaction,
+)
 from spending_api.nessie import DataSourceError, load_snapshot
 from spending_api.photon import enqueue_event, parse_incoming
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings or Settings()
+    settings = settings or load_settings()
     app = FastAPI(title="Spending Companion API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -61,6 +69,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def accounts(tools: Annotated[SpendingTools, Depends(scoped_tools)]):
         return tools.snapshot.accounts
 
+    @app.get("/api/v1/dashboard", response_model=DashboardData)
+    async def dashboard(
+        response: Response,
+        tools: Annotated[SpendingTools, Depends(scoped_tools)],
+        dates: Annotated[DateRange, Depends(window)],
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        return build_dashboard(tools, dates)
+
     @app.get("/api/v1/transactions", response_model=list[Transaction])
     async def transactions(
         tools: Annotated[SpendingTools, Depends(scoped_tools)],
@@ -84,7 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/webhooks/photon", status_code=204, response_class=Response)
     async def photon_webhook(request: Request):
-        if not all(
+        if not settings.photon_enabled or not all(
             [
                 settings.photon_webhook_secret.get_secret_value(),
                 settings.photon_agent_user_id,

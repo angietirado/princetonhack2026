@@ -1,0 +1,16 @@
+# Non-secret MVP settings. API keys and APP_API_TOKEN belong in .env.
+# Pinned from historical simulation sim_01m7cem2mmfn4d36mdnecdtzqc on 2026-11-14.
+# Restarting the application only reads this customer; it never generates another.
+data_source = "nessie"
+fixture_path = ".data/demo.json"
+nessie_base_url = "https://v2-prod-api.nessieisreal.com"
+nessie_customer_id = "cust_01m7cen22b7daz0s8gkcp3mt96"
+cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+# Phone messaging is deferred until the terminal MVP is ready.
+photon_enabled = false
+photon_api_base_url = "https://api.photon.codes/v1"
+photon_project_id = ""
+photon_agent_user_id = ""
+photon_allowed_sender_id = ""
+photon_inbox_path = ".data/photon-inbox.sqlite3"

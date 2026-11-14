@@ -61,3 +61,24 @@ class RecurringCharge(BaseModel):
     interval_days: int
     transaction_ids: list[str]
     confidence: str = "candidate"
+
+
+class SpendingMonth(BaseModel):
+    month: str
+    net_spending_cents: int
+
+
+class DashboardData(BaseModel):
+    source: str
+    customer_id: str | None
+    as_of: datetime
+    accounts: list[Account]
+    cash_balance_cents: int
+    credit_balance_cents: int
+    summary: SpendingSummary
+    gross_spending_cents: int
+    refunds_cents: int
+    expense_categories: list[CategoryTotal]
+    monthly_spending: list[SpendingMonth]
+    transactions: list[Transaction]
+    recurring: list[RecurringCharge]

@@ -1,37 +1,50 @@
 # Frontend handoff
 
-This is a minimal React + TypeScript + Vite app. Replace the UI freely while keeping provider secrets on FastAPI. The only screen currently loads a spending summary with loading, error, and refresh states.
+This directory retains a minimal React + TypeScript + Vite source scaffold. The default Docker frontend serves the connected Ledgerly dashboard from the repository's root `index.html`, `app.js`, and `styles.css`. Its charts, balances, tables, and reports load FastAPI's unified dashboard response.
+
+## Run with Docker
+
+From the repository root:
 
 ```sh
-npm ci
-npm run dev
-npm run build
+docker compose --env-file .env.example up --build --detach --wait
 ```
 
-Start FastAPI on `127.0.0.1:8765` using the root README. Vite proxies `/api` and `/health` to it. Production hosting will need the same reverse proxy or an explicitly configured API origin; a static build by itself does not start the backend.
+Open Ledgerly at `http://127.0.0.1:5173`. Compose creates a missing fixture, starts FastAPI, and serves the root dashboard files through nginx. The dashboard uses the same-origin `/api` proxy. This command uses `.env.example` for offline fixture data. Start with `--env-file .env` for the configured Nessie customer and unlock with your existing app token.
 
-## Contract
+Run the same command after source changes to rebuild the images. The frontend image serves static files without live reload. See the [root README](../../README.md) for logs and shutdown commands. Run the dashboard regression tests in Docker:
 
-Use `http://127.0.0.1:8765/docs` or `/openapi.json` for the authoritative schema. The current typed client is `src/api.ts`.
+```sh
+docker compose --env-file .env.example --profile tools run --build --rm dashboard-tests
+```
+
+## Dashboard API contract
+
+Use `http://127.0.0.1:8765/docs` or `/openapi.json` for the authoritative schema. The React scaffold's typed client is `src/api.ts`; it is not currently used by the root dashboard.
 
 | Route | Returns |
 | --- | --- |
+| `/api/v1/dashboard` | One scoped snapshot: accounts, cash/card balances, summary, gross expenses, refunds, expense categories, monthly net spending, transactions, recurring candidates, source, customer ID, and retrieval time |
 | `/api/v1/accounts` | Array of `{ id, customer_id, nickname, type, balance_cents }` |
 | `/api/v1/transactions` | Array with account, merchant/category, amount, kind, status, and timestamp |
 | `/api/v1/spending/summary` | `{ source, currency, start, end, net_spending_cents, included_count, excluded_count, categories }` |
 | `/api/v1/spending/recurring` | Array of recurring candidates with evidence transaction IDs |
 
-The three spending/transaction routes accept optional `start` and `end` in `YYYY-MM-DD` format. Dates are inclusive and use UTC. Invalid ranges return `422`; upstream failure returns `502`; a missing fixture returns `503`. Categories are `{ category, amount_cents }`, sorted by amount descending. Empty windows return zero totals and empty categories. Net amounts may be negative after refunds.
+The dashboard and spending/transaction routes accept optional `start` and `end` in `YYYY-MM-DD` format. Dates are inclusive and use UTC. Invalid ranges return `422`; upstream failure returns `502`; a missing fixture returns `503`. Categories are `{ category, amount_cents }`, sorted by amount descending. Empty windows return zero totals and empty categories. Net amounts may be negative after refunds. Account balances are current, independent of the selected transaction period.
 
 Format cents with `Intl.NumberFormat`, dividing by 100 at display time. Preserve `source` visibly so fixture data is identified as synthetic. All requests are scoped by the backend; there is no client-supplied customer selector in this single-user scaffold.
 
-Fixture mode requires no authentication unless `APP_API_TOKEN` is set. Nessie mode requires a bearer token; this temporary gate is for backend smoke tests. The real login/enrollment flow and production API hosting remain team decisions. Never place a Nessie or Photon key in a `VITE_` variable.
+Fixture mode requires no authentication unless `APP_API_TOKEN` is set. The dashboard prompts for this token on a `401`, holds it only in page memory, and sends a bearer header. Lock/reload clears it; no token is put in localStorage, sessionStorage, or bundled code. Production user enrollment remains a later decision. Never place a Nessie or Photon key in a `VITE_` variable.
 
 ## Suggested next UI work
 
-- Period selection and category breakdown.
-- Transaction evidence and recurring-charge review.
-- Phone enrollment and connection status after the backend implements enrollment.
+- Build on the existing date filters, category/monthly charts, transaction search/status filters, pagination, and CSV export.
+- Add verified invoice/context evidence when backend support exists.
+- Phone enrollment stays deferred until the MVP is complete.
 - Conversation view after a real agent endpoint exists.
 
 Coordinate API changes in [the design doc](../../docs/DESIGN.md) before changing response fields. No UI framework or charting library has been chosen.
+
+## Optional work on the React scaffold
+
+The [optional native setup](../../docs/LOCAL_DEVELOPMENT.md) is available for developing the React source with Vite. It is separate from the Docker-served Ledgerly dashboard and is not required to run or test that dashboard.

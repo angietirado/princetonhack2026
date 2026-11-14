@@ -1,6 +1,10 @@
 # Spending Companion design and decisions
 
-Status: initial scaffold and MVP plan. Updated November 13, 2026.
+Status: connected dashboard and spending tools; AI orchestration planned. Updated November 14, 2026.
+
+Current MVP scope: visualize and analyze one pinned Nessie customer through the Ledgerly dashboard and terminal.
+Public options live in `settings.toml`; credentials stay in `.env`. Photon is explicitly
+disabled until the MVP is complete. The phone architecture below remains the later milestone.
 
 Build a phone-first spending companion: a user texts a question, agents inspect that user's Nessie v2 transactions, and Photon 2.0 carries a concise, evidence-backed answer back to their phone. A small web app shows the same spending information. The hackathon demo should make a spending change understandable and suggest an action the user can choose to take.
 
@@ -15,12 +19,13 @@ The first demo uses synthetic customers and transactions. Success means one enro
 | Area | Decision | Status |
 | --- | --- | --- |
 | Backend | Python 3.12 and FastAPI; typed request and response models | Set up |
-| Banking data | Capital One Nessie v2 through a backend-only adapter | Adapter ready; credentials needed |
+| Banking data | Capital One Nessie v2 through a backend-only adapter | Connected; one generated customer pinned in settings |
 | Project split | Application under `apps/`; independent package under `data-generator/` | Set up |
-| Frontend | React, TypeScript, Vite; leave product UI to the frontend teammate | Minimal page ready |
+| Frontend | Serve the root Ledgerly dashboard; retain the React, TypeScript, and Vite scaffold | Connected charts, balances, filtered transactions, and CSV reports |
 | Agents | Provider-neutral tools with deterministic calculations; choose model runtime later | Tools ready; orchestration planned |
 | Phone channel | Photon 2.0 Beta, with SMS as the intended demo channel | Boundary ready; provisioning and worker planned |
 | Local development | Fixture mode by default; no external service needed | Working |
+| Containers | Docker Compose runs FastAPI, Ledgerly behind nginx, and a separate generator | Set up |
 | Message persistence | SQLite durable inbox for the single-process demo | Receiver ready; consumer planned |
 | Deployment | Local development first; choose hosting when the phone flow is ready | Open |
 
@@ -36,7 +41,8 @@ flowchart LR
     Inbox -. planned .-> Worker[Agent worker]
     Worker -. reply transport .-> Photon
     Worker -. calls .-> Tools[Scoped spending tools]
-    React[Minimal React app] --> API[FastAPI read endpoints]
+    Ledgerly[Ledgerly dashboard] --> API[FastAPI read endpoints]
+    React[React source scaffold] --> API
     API --> Tools
     Tools --> Adapter[Data adapter]
     Adapter --> Nessie[Nessie v2]
@@ -48,7 +54,15 @@ flowchart LR
 
 The app never imports or runs the generator. Both agree on the fixture boundary: accounts, merchants, and transactions shaped like the portions of Nessie v2 the app reads. `schema_version: 1` identifies the local fixture format. The shared Python workspace simplifies development; each package has its own manifest and can be installed separately.
 
-The backend is the sole boundary for provider keys and banking data. The browser calls only FastAPI. The initial server is bound to loopback and serves one configured customer; multi-user authentication is a later milestone.
+The backend is the sole boundary for provider keys and banking data. Ledgerly calls only FastAPI and uses one scoped dashboard response for its charts, balances, tables, and reports. When required, the user enters the shared app bearer token; it stays in page memory and is cleared on lock or reload. Host-facing ports are bound to loopback and serve one configured customer; multi-user authentication is a later milestone.
+
+### Docker runtime
+
+The root `compose.yaml` runs the application without requiring host Python or Node.js. FastAPI listens on container port 8765; nginx serves the root Ledgerly dashboard files on container port 8080 and exposes `/api`, `/health`, and `/webhooks` proxy routes to FastAPI. Host ports remain 8765 for the API and 5173 for the dashboard. The React source scaffold is retained but is not served by the default frontend image. Provider settings are supplied to Python services at runtime.
+
+A one-shot `data-init` service creates a missing fixture before the backend starts. The standalone `generator` service is available through the `tools` profile for intentional generation runs. Both Python services use the `app-data` named volume at `/app/.data`; fixtures and the SQLite inbox survive container recreation, and initial startup never replaces an existing fixture. Host `.data` files are separate. Code changes require rebuilding the images; the native development commands remain available for automatic reloads.
+
+The `dashboard-tests` service in the `tools` profile runs the root dashboard's DOM regression tests in Docker. Use `--env-file .env.example` for credential-free startup and validation.
 
 ## Request flow
 
@@ -95,6 +109,7 @@ The app reads customer accounts, merchants, and the tenant transaction list, the
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /health` | Process health and configured data source |
+| `GET /api/v1/dashboard?start=YYYY-MM-DD&end=YYYY-MM-DD` | Unified scoped snapshot for charts, balances, transactions, and recurring candidates |
 | `GET /api/v1/accounts` | Configured customer's accounts |
 | `GET /api/v1/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD` | Scoped transaction evidence |
 | `GET /api/v1/spending/summary?start=...&end=...` | Spending totals and categories |
@@ -102,7 +117,7 @@ The app reads customer accounts, merchants, and the tenant transaction list, the
 | `POST /webhooks/photon` | Signed provider events; durable receipt only |
 | `GET /docs` and `GET /openapi.json` | Executable API contract |
 
-The React starter has one summary view, loading and failure states, and a refresh button. It contains no provider keys. It leaves navigation, charts, conversation UX, visual design, and authentication flows to the frontend teammate. [Frontend handoff](../apps/frontend/README.md)
+The served Ledgerly dashboard shows current cash and card balances, gross expenses by category, refunds, monthly net spending, and searchable transactions. Date filters apply to activity and reports, while balances remain current. CSV exports include all filtered rows across table pages. Recurring charges are labeled candidates; AI conversation remains a placeholder until orchestration is implemented. Source labels distinguish Nessie from local synthetic fixtures. The retained React starter is not the Docker default. [Frontend handoff](../apps/frontend/README.md)
 
 ## Data generator
 
@@ -123,7 +138,7 @@ The generator owns sandbox creation. The application owns read-only analysis. Th
 | 3 — Phone loop | Provision SMS, connect receiver, implement persistent worker/outbox | A phone question receives one reply; duplicate delivery and restart do not send twice |
 | 4 — Demo polish | Frontend teammate's UI; follow-up context; a short demo script | Phone and web show matching totals for the same customer and dates |
 
-The offline automated checks cover exact money arithmetic, exclusions/refunds, customer scope, monthly candidates, pagination, API authorization/date validation, webhook signatures/replay age, duplicate persistence, sender filtering, and outbound idempotency headers. Provider behavior still needs credentialed smoke tests.
+The offline automated checks cover exact money arithmetic, exclusions/refunds, customer scope, monthly candidates, dashboard totals, filtering, pagination, CSV safety, stale-request handling, and API authorization/date validation, plus the deferred webhook boundary. Desktop and mobile browser checks exercise the served dashboard with synthetic fixtures. These checks do not load private credentials.
 
 ## Next decisions and backlog
 
@@ -133,7 +148,7 @@ The offline automated checks cover exact money arithmetic, exclusions/refunds, c
 - [ ] Add the inbox worker, persisted reply/outbox, retry/backoff, and delivery-status handling.
 - [ ] Add one conversation of bounded history per enrolled sender, plus opt-out handling before proactive messages.
 - [ ] Replace the shared demo bearer token and single-customer settings with real user authentication and verified phone-to-customer enrollment before opening access.
-- [ ] Add user timezone handling, caching, provider rate-limit backoff, and data freshness timestamps.
+- [ ] Add user timezone handling, caching, and provider rate-limit backoff. The dashboard already displays retrieval time.
 - [ ] Choose deployment for the FastAPI process and persistent database; the webhook requires public HTTPS.
 
 Stretch ideas: weekly spending digests, category budgets, richer recurring-charge detection, unusual-spend comparisons, and a dashboard link from a reply. Keep money movement, automatic subscription cancellation, and unrelated banking operations outside the hackathon MVP.
@@ -147,3 +162,7 @@ Stretch ideas: weekly spending digests, category budgets, richer recurring-charg
 | 2026-11-13 | Use Nessie v2 historical simulations for sandbox seeding | Reuse the provider's supported generator and preserve its returned IDs |
 | 2026-11-13 | Leave the LLM provider undecided; implement tools first | Stabilize calculations and scope before choosing the agent runtime |
 | 2026-11-13 | Persist verified Photon events before acknowledgment | Make receiver retries safe and leave a clear boundary for the worker |
+| 2026-11-14 | Add Docker Compose with a built frontend, separate generator, and persistent data volume | Give teammates one startup command while preserving service boundaries and demo data |
+| 2026-11-14 | Pin one generated Nessie customer in readable TOML; retain credentials in `.env`; use terminal tools and defer Photon | Keep the MVP dataset stable and remove messaging setup from the critical path |
+| 2026-11-14 | Serve the root Ledgerly prototype and run dashboard regressions through Docker | Make the actual dashboard available through the team's default container workflow |
+| 2026-11-14 | Connect Ledgerly visualizations to one protected FastAPI dashboard response; keep Photon disabled | Present consistent customer-scoped figures, date filters, and exports without fabricated sample totals |

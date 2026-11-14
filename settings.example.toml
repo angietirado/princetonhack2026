@@ -1,0 +1,13 @@
+# Safe offline settings for teammates, automated checks, and Docker smoke tests.
+data_source = "fixture"
+fixture_path = ".data/demo.json"
+nessie_base_url = "https://v2-prod-api.nessieisreal.com"
+nessie_customer_id = ""
+cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+photon_enabled = false
+photon_api_base_url = "https://api.photon.codes/v1"
+photon_project_id = ""
+photon_agent_user_id = ""
+photon_allowed_sender_id = ""
+photon_inbox_path = ".data/photon-inbox.sqlite3"

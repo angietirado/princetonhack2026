@@ -19,6 +19,7 @@ SECRET = "whsec_" + base64.b64encode(b"test-only-signing-secret-32-bytes").decod
 def settings(tmp_path):
     return Settings(
         _env_file=None,
+        photon_enabled=True,
         photon_webhook_secret=SECRET,
         photon_agent_user_id="pho_usr_agent",
         photon_allowed_sender_id="pho_usr_human",
