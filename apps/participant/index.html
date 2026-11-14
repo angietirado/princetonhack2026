@@ -31,8 +31,9 @@
         <div class="map-card"><div class="map-topline"><span><span class="small-dot"></span> HOUSTON, TEXAS</span><span class="tag">Neighborhood sketch</span></div><div id="preview-map" class="neighborhood-map"></div><div class="map-caption"><span id="preview-location">Choose your starting point</span><span>Locations ≠ directions</span></div></div>
       </div>
       <section class="setup-section" aria-labelledby="scenario-heading">
-        <div class="section-heading"><div><p class="eyebrow">01 / YOUR STARTING POINT</p><h2 id="scenario-heading">Pick a neighborhood.</h2></div><p>A real home location. A fictional shopping day.</p></div>
+        <div class="section-heading"><div><p class="eyebrow">01 / YOUR STARTING POINT</p><h2 id="scenario-heading">Choose a starting home.</h2></div><p>A real home location. A fictional shopping day.</p></div>
         <div id="scenario-cards" class="scenario-grid" role="group" aria-label="Choose a scenario"></div>
+        <div class="home-context" aria-live="polite" aria-atomic="true"><p id="selected-home" class="home-context-address" hidden></p><p id="home-source-note"></p><p id="world-context"></p></div>
       </section>
       <form id="start-form" class="setup-panel">
         <div class="setup-panel-copy"><p class="eyebrow">02 / YOUR RULES</p><h2>Make room for <br>what matters.</h2><p>Set a hypothetical allowance and time limit. No personal financial details needed.</p></div>
@@ -52,6 +53,7 @@
     </section>
     <section id="challenge" hidden aria-labelledby="challenge-heading">
       <div class="challenge-header"><div><p class="eyebrow" id="scenario-eyebrow">YOUR HOUSTON CHALLENGE</p><h1 id="challenge-heading">Your basket. Your call.</h1><p id="challenge-description"></p></div><button id="new-session" class="button text-button">Start a new challenge <span aria-hidden="true">↗</span></button></div>
+      <p id="active-home-context" class="active-home-context" hidden></p>
       <ol class="progress" aria-label="Challenge progress"><li id="step-build" class="active"><span>1</span>Build your shop</li><li id="step-compare"><span>2</span>Explore tradeoffs</li><li id="step-save"><span>3</span>Make your choice</li></ol>
       <div id="session-notice" class="notice" role="status" hidden></div>
       <div class="challenge-layout">
@@ -85,7 +87,7 @@
           </div>
           <details class="limits-card"><summary>Your limits <span id="limits-summary"></span></summary><form id="limits-form"><label class="field">Budget ($)<input id="active-budget" type="number" min="0.01" max="10000" step="0.01" required></label><label class="field">Whole-trip time (minutes)<input id="active-time" type="number" min="0" max="1440" step="any" required></label><label class="field">Travel<select id="active-mode"><option value="drive">Driving</option><option value="walk">Walking</option></select></label><label class="field">Maximum stops<select id="active-stops"><option value="1">1 store</option><option value="2">2 stores</option></select></label><p class="quiet">Changed limits are saved with your next choice. Comparisons use matching limits.</p><button class="button secondary full-width" type="submit">Apply limits</button></form></details>
           <div class="mini-map-card"><div id="active-map" class="neighborhood-map"></div><p>Neighborhood sketch · not directions</p></div>
-          <details class="source-card"><summary>About this scenario</summary><p id="source-home"></p><p id="source-housing"></p><div id="source-notes"></div></details>
+          <details class="source-card"><summary>About this scenario</summary><p id="source-home"></p><p id="source-housing"></p><p id="source-world"></p><div id="source-notes"></div></details>
         </aside>
       </div>
     </section>

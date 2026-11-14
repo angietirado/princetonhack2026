@@ -28,9 +28,10 @@ function evaluation(assignments = { milk: "corner", bread: "corner" }, limits = 
 }
 function boot(t, options = {}) {
   const calls = [], choices = [], errors = [], chatHistory = clone(options.chatHistory || []);
+  const scenarios = clone(options.scenarios || [scenario()]);
   const chatReplies = new Map(); let chatConstraints = clone(constraints);
   let sequence = 0;
-  const serverSession = { id: "session-1", token: "scoped-session-token", scenario: scenario(), constraints: clone(constraints), is_demo: false, created_at: "2026-11-14T12:00:00Z", choices };
+  const serverSession = { id: "session-1", token: "scoped-session-token", scenario: clone(options.snapshot || scenarios[0]), constraints: clone(constraints), is_demo: false, created_at: "2026-11-14T12:00:00Z", choices };
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (e) => errors.push(e));
   const dom = new JSDOM(html, { url: options.url || "http://localhost:5183/", runScripts: "outside-only", virtualConsole });
@@ -41,8 +42,8 @@ function boot(t, options = {}) {
   if (options.initial) choices.push(clone(options.initial));
   const defaultHandler = async (url, request) => {
     const body = request.body ? JSON.parse(request.body) : null;
-    if (url === "/api/v1/scenarios") return response({ scenarios: [scenario()], simulation_notice: "Simulation." });
-    if (url === "/api/v1/sessions") { serverSession.constraints = body.constraints; serverSession.is_demo = body.is_demo; return response(serverSession); }
+    if (url === "/api/v1/scenarios") return response({ scenarios, simulation_notice: "Simulation." });
+    if (url === "/api/v1/sessions") { serverSession.scenario = clone(scenarios.find((item) => item.id === body.scenario_id) || serverSession.scenario); serverSession.constraints = body.constraints; serverSession.is_demo = body.is_demo; return response(serverSession); }
     if (request.headers.Authorization !== "Bearer scoped-session-token") return response({ detail: "Not authorized" }, 401);
     if (url === "/api/v1/sessions/session-1") return response(serverSession);
     if (url.endsWith("/chat")) {
@@ -294,3 +295,79 @@ test("chat failures leave the core basket usable and reject oversized messages l
   assert.equal(app.get("total-cost").textContent, "$11.00");
 });
 
+
+function rentalScenario(id = "west", rent = 230000) {
+  const item = scenario();
+  item.id = "houston-rental-" + id; item.name = id + " shopping challenge";
+  item.world_id = "houston-inner-loop"; item.world_version = "shared-fixture-world";
+  Object.assign(item.home, { recorded_address: "1010 Rosine Street", unit_number: "49", housing_price_basis: "monthly_rent", monthly_rent_cents: rent, bedrooms_min: 2, bedrooms_max: 2, living_area_sqft_min: 1300, living_area_sqft_max: 1300, source_listing_date: "2026-11-04T00:00:00+00:00", additional_monthly_fees_cents: null, all_in_monthly_housing_cost_cents: null });
+  return item;
+}
+
+test("recorded rent and home facts are visible with unknown fees and shared-world context", async (t) => {
+  const rental = rentalScenario();
+  const app = boot(t, { scenarios: [rental] }); await tick();
+  const card = app.window.document.querySelector(".scenario-card");
+  assert.match(card.textContent, /\$2,300\.00/);
+  assert.match(card.textContent, /month · recorded rent/);
+  assert.match(card.textContent, /2 bedrooms · 1,300 sq ft/);
+  assert.equal(app.get("selected-home").textContent, "1010 Rosine Street, unit 49");
+  assert.match(app.get("home-source-note").textContent, /Historical CoStar asking rent/);
+  assert.match(app.get("home-source-note").textContent, /fees and utilities are unknown/);
+  assert.match(app.get("world-context").textContent, /same 3 fictional stores and prices/);
+  assert.match(app.get("world-context").textContent, /starting home changes modeled travel/);
+  assert.match(app.get("world-context").textContent, /shopping budget is set separately/);
+  assert.equal(app.get("setup-budget").value, "25.00");
+  await app.start();
+  assert.equal(app.get("active-home-context").hidden, false);
+  assert.match(app.get("active-home-context").textContent, /Recorded asking rent: \$2,300\.00/);
+  assert.match(app.get("active-home-context").textContent, /fees and utilities unknown/);
+  assert.match(app.get("source-home").textContent, /unit 49 · 2 bedrooms · 1,300 sq ft/);
+  assert.match(app.get("source-housing").textContent, /Source listing date: 2026-11-04\./);
+  assert.doesNotMatch(app.get("source-housing").textContent, /2026-11-03/);
+  assert.equal(app.get("source-world").textContent, app.get("world-context").textContent);
+});
+
+test("switching homes updates recorded context without deriving a shopping budget from rent", async (t) => {
+  const west = rentalScenario(), east = rentalScenario("east", 320000);
+  east.home.recorded_address = 'A home <img src=x onerror="alert(1)">';
+  east.home.unit_number = null; east.home.bedrooms_min = 3; east.home.bedrooms_max = 3;
+  const app = boot(t, { scenarios: [west, east] }); await tick();
+  app.window.document.querySelector('[data-scenario="houston-rental-east"]').click();
+  assert.equal(app.get("selected-home").textContent, east.home.recorded_address);
+  assert.equal(app.get("selected-home").querySelector("img"), null);
+  assert.equal(app.get("setup-budget").value, "25.00");
+  assert.equal(app.window.document.querySelector('[data-scenario="houston-rental-east"]').getAttribute("aria-pressed"), "true");
+  assert.equal(app.window.document.querySelector('[data-scenario="houston-rental-west"]').getAttribute("aria-pressed"), "false");
+  await app.start();
+  assert.match(app.get("active-home-context").textContent, /\$3,200\.00/);
+  assert.match(app.get("source-home").textContent, /3 bedrooms/);
+  assert.equal(app.get("source-home").querySelector("img"), null);
+  assert.equal(app.get("active-budget").value, "25.00");
+  assert.equal(JSON.parse(app.calls.find((c) => c.url === "/api/v1/sessions").request.body).scenario_id, east.id);
+});
+
+test("legacy snapshots keep their own housing context and never turn sale prices into rent", async (t) => {
+  const legacy = scenario();
+  legacy.home.housing_price_usd = 450000; legacy.home.housing_price_basis = "sale_price";
+  const app = boot(t, { scenarios: [rentalScenario()], snapshot: legacy, stored: { id: "session-1", token: "scoped-session-token", assignments: {}, constraints: clone(constraints) } }); await tick();
+  assert.equal(app.get("challenge").hidden, false);
+  assert.equal(app.get("active-home-context").hidden, true);
+  assert.equal(app.get("active-home-context").textContent, "");
+  assert.equal(app.get("source-housing").textContent, legacy.home.housing_context);
+  assert.match(app.get("source-world").textContent, /simulated for this scenario/);
+  assert.doesNotMatch(app.get("source-world").textContent, /same .*fictional stores/);
+  assert.doesNotMatch(app.get("source-housing").textContent, /450,000|\$0|undefined|NaN/);
+});
+
+test("absent and invalid rental metadata are omitted instead of displayed as zero", async (t) => {
+  const missing = rentalScenario(); delete missing.home.monthly_rent_cents; delete missing.home.housing_context;
+  missing.home.bedrooms_min = null; missing.home.bedrooms_max = null;
+  const app = boot(t, { scenarios: [missing] }); await tick();
+  assert.equal(app.window.document.querySelector(".scenario-rent"), null);
+  assert.match(app.get("home-source-note").textContent, /Housing costs are not available/);
+  assert.doesNotMatch(app.get("scenario-cards").textContent, /\$0|NaN|undefined/);
+  await app.start();
+  assert.equal(app.get("active-home-context").hidden, true);
+  assert.doesNotMatch(app.get("source-home").textContent, /0 bedrooms|Studio/);
+});

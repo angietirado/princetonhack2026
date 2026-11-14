@@ -84,12 +84,32 @@
     }).join("");
     $(target).innerHTML = '<svg viewBox="0 0 500 320" role="img" aria-label="' + escape("Schematic locations for " + scenario.name + ". Numbers match the store cards. Not a road map.") + '"><defs><pattern id="' + target + '-grid" width="65" height="58" patternUnits="userSpaceOnUse" patternTransform="rotate(-13 250 160)"><rect x="6" y="6" width="48" height="41" rx="6" fill="#e0e6d1"/><path d="M0 53H65M59 0V58" stroke="#f6f6e9" stroke-width="8"/></pattern></defs><rect width="500" height="320" fill="url(#' + target + '-grid)"/><path d="M-15 270C90 180 95 210 185 245S360 280 525 215" fill="none" stroke="#c7dcda" stroke-width="18" opacity=".75"/><ellipse cx="403" cy="80" rx="40" ry="26" fill="#c9d8af"/><ellipse cx="107" cy="109" rx="27" ry="34" fill="#c9d8af"/>' + (path ? '<polyline points="' + path + '" fill="none" stroke="#527d57" stroke-width="3" stroke-dasharray="6 5" opacity=".75"/>' : "") + markers + '<text x="469" y="29" font-size="9" fill="#647761" text-anchor="middle">N</text><path d="m469 36-4 10 4-3 4 3Z" fill="#647761"/></svg>';
   }
+  function recordedRent(home) {
+    return home.housing_price_basis === "monthly_rent" && Number.isSafeInteger(home.monthly_rent_cents) && home.monthly_rent_cents > 0 ? home.monthly_rent_cents : null;
+  }
+  function homeFacts(home) {
+    const range = (min, max, unit) => Number.isFinite(min) && Number.isFinite(max) && min >= 0 && max >= min ? (min === max ? min.toLocaleString("en-US") : min.toLocaleString("en-US") + "–" + max.toLocaleString("en-US")) + " " + unit : "";
+    return [home.bedrooms_min === 0 && home.bedrooms_max === 0 ? "Studio" : range(home.bedrooms_min, home.bedrooms_max, "bedrooms"), home.living_area_sqft_min > 0 ? range(home.living_area_sqft_min, home.living_area_sqft_max, "sq ft") : ""].filter(Boolean).join(" · ");
+  }
+  function homeAddress(home) {
+    return home.recorded_address ? home.recorded_address + (home.unit_number ? ", unit " + home.unit_number : "") : "";
+  }
+  function homeNotice(home) {
+    return recordedRent(home) !== null ? "Historical CoStar asking rent. Current availability is unverified; fees and utilities are unknown. This is not an all-in housing cost." : home.housing_context || "Historical home location. Housing costs are not available for this scenario.";
+  }
+  function worldContext(scenario) {
+    return scenario.world_id && scenario.world_version ? "The same " + scenario.stores.length + " fictional stores and prices appear for each home in this world. Your starting home changes modeled travel. Your shopping budget is set separately." : "Stores, prices and travel are simulated for this scenario. Your shopping budget is set separately.";
+  }
   function chooseScenario(id) {
     state.scenario = state.scenarios.find((s) => s.id === id);
     if (!state.scenario) return;
     setFields("setup", state.scenario.defaults);
     [...$("scenario-cards").children].forEach((button) => { const selected = button.dataset.scenario === id; button.classList.toggle("selected", selected); button.setAttribute("aria-pressed", String(selected)); });
     $("preview-location").textContent = state.scenario.home.label;
+    $("selected-home").textContent = homeAddress(state.scenario.home);
+    $("selected-home").hidden = !$("selected-home").textContent;
+    $("home-source-note").textContent = homeNotice(state.scenario.home);
+    $("world-context").textContent = worldContext(state.scenario);
     renderMap("preview-map", state.scenario);
   }
   function renderScenarios() {
@@ -97,7 +117,9 @@
     state.scenarios.forEach((scenario, i) => {
       const button = document.createElement("button");
       button.type = "button"; button.className = "scenario-card"; button.dataset.scenario = scenario.id;
-      button.innerHTML = '<span class="scenario-number">NEIGHBORHOOD ' + String(i + 1).padStart(2, "0") + '</span><span class="selection-dot" aria-hidden="true"></span><strong>' + escape(scenario.name.replace(/ shopping challenge$/i, "")) + '</strong><p>' + escape(scenario.defaults.travel_mode === "walk" ? "A walkable challenge. How far is a saving worth?" : "A shopping day with room to explore your options.") + '</p>';
+      const rent = recordedRent(scenario.home), facts = homeFacts(scenario.home);
+      const detail = rent !== null ? '<p class="scenario-rent">' + money(rent) + '<span>/month · recorded rent</span></p>' + (facts ? '<p class="scenario-home-facts">' + escape(facts) + '</p>' : "") : '<p>' + escape(scenario.defaults.travel_mode === "walk" ? "A walking-mode challenge. How far is a saving worth?" : "A shopping day with room to explore your options.") + '</p>';
+      button.innerHTML = '<span class="scenario-number">STARTING HOME ' + String(i + 1).padStart(2, "0") + '</span><span class="selection-dot" aria-hidden="true"></span><strong>' + escape(scenario.name.replace(/ shopping challenge$/i, "")) + '</strong>' + detail;
       button.addEventListener("click", () => chooseScenario(scenario.id)); $("scenario-cards").append(button);
     });
     chooseScenario(state.scenario?.id || state.scenarios[0]?.id);
@@ -205,8 +227,13 @@
     $("challenge-description").textContent = state.scenario.description;
     setFields("active", state.constraints);
     $("limits-summary").textContent = money(state.constraints.budget_cents) + " · " + minutes(state.constraints.time_budget_minutes);
-    $("source-home").textContent = state.scenario.home.label + " — CoStar location.";
-    $("source-housing").textContent = state.scenario.home.housing_context || "No resident income is inferred from this location.";
+    const home = state.scenario.home, rent = recordedRent(home), facts = homeFacts(home);
+    $("active-home-context").hidden = rent === null;
+    $("active-home-context").textContent = rent !== null ? "Recorded asking rent: " + money(rent) + "/month · historical record · fees and utilities unknown" : "";
+    $("source-home").textContent = (homeAddress(home) || home.label) + (facts ? " · " + facts : "") + (home.source === "costar" ? " — recorded CoStar location." : "");
+    const listingDate = typeof home.source_listing_date === "string" && /^\d{4}-\d{2}-\d{2}T/.test(home.source_listing_date) ? " Source listing date: " + home.source_listing_date.slice(0, 10) + "." : "";
+    $("source-housing").textContent = homeNotice(home) + listingDate;
+    $("source-world").textContent = worldContext(state.scenario);
     $("source-notes").replaceChildren();
     Object.values(state.scenario.provenance || {}).forEach((text) => { const p = document.createElement("p"); p.textContent = text; $("source-notes").append(p); });
     renderStores(); renderBasket(); renderMap("active-map", state.scenario); clearEvaluation();
