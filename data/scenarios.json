@@ -2,21 +2,42 @@
   "schema_version": 1,
   "scenarios": [
     {
-      "id": "houston-heights",
-      "version": "c9961275da5b",
-      "name": "Heights shopping challenge",
-      "description": "Complete the same eight-item basket from a home near Heights. Decide what convenience is worth to you.",
+      "id": "houston-rental-west",
+      "name": "West · Rosine Street shopping challenge",
+      "description": "Shop the same eight-item basket at the same five fictional stores. Only your recorded rental starting point changes.",
+      "world_id": "houston-inner-loop",
+      "world_version": "d28a11f41d8b6d82ec38ca9aa512736b803b41acf5d4544daa716abf77a70090",
       "home": {
-        "label": "Your Heights starting point",
-        "latitude": 29.795895,
-        "longitude": -95.399857,
-        "housing_context": "Recorded Houston home location. No resident income or spending is inferred.",
+        "label": "Your west starting point",
+        "latitude": 29.75684,
+        "longitude": -95.399208,
         "source": "costar",
-        "source_record_id": "216300602",
+        "source_record_id": "240486874",
         "source_dataset": "residential-listings",
-        "recorded_address": "1342 Allston Street",
-        "housing_price_usd": null,
-        "housing_price_basis": "sale_asking"
+        "source_property_id": "500020427889",
+        "source_residential_listing_id": "223423787",
+        "source_permission_homes": 10,
+        "source_transaction_type": 2,
+        "source_listing_status": 1,
+        "source_monetary_unit": 1,
+        "source_listing_date": "2026-11-04T00:00:00+00:00",
+        "source_dom_date": "2026-11-04T00:00:00+00:00",
+        "source_snapshot_date": null,
+        "current_availability_verified": false,
+        "recorded_address": "1010 Rosine Street",
+        "unit_number": "49",
+        "bedrooms_min": 2,
+        "bedrooms_max": 2,
+        "living_area_sqft_min": 1300.0,
+        "living_area_sqft_max": 1300.0,
+        "monthly_rent_cents": 230000,
+        "housing_price_usd": 2300.0,
+        "housing_price_basis": "monthly_rent",
+        "additional_monthly_fees_cents": null,
+        "additional_monthly_fees_status": "unknown",
+        "all_in_monthly_housing_cost_cents": null,
+        "source_fingerprint": "5667b25d243715c9e31e921d93161ec80c2d12554252678daf3a7f1839c1dca6",
+        "housing_context": "Recorded asking rent: $2,300.00/month at 1010 Rosine Street, unit 49. 2 bedrooms; 1,300 sq ft. Historical listing context; current availability and additional fees are unverified. No resident income or shopping allowance is inferred."
       },
       "defaults": {
         "budget_cents": 6500,
@@ -84,10 +105,10 @@
       ],
       "stores": [
         {
-          "id": "houston-heights-corner",
+          "id": "houston-inner-loop-corner",
           "name": "Corner Market",
-          "latitude": 29.796614,
-          "longitude": -95.398201,
+          "latitude": 29.7576,
+          "longitude": -95.3976,
           "shopping_minutes": 7,
           "prices": {
             "milk": 519,
@@ -101,10 +122,10 @@
           }
         },
         {
-          "id": "houston-heights-grove",
+          "id": "houston-inner-loop-grove",
           "name": "Grove Grocer",
-          "latitude": 29.79859,
-          "longitude": -95.404826,
+          "latitude": 29.7565,
+          "longitude": -95.381,
           "shopping_minutes": 10,
           "prices": {
             "milk": 419,
@@ -118,10 +139,10 @@
           }
         },
         {
-          "id": "houston-heights-pantry",
+          "id": "houston-inner-loop-pantry",
           "name": "Pantry & Co.",
-          "latitude": 29.792481,
-          "longitude": -95.393128,
+          "latitude": 29.752,
+          "longitude": -95.358,
           "shopping_minutes": 11,
           "prices": {
             "milk": 379,
@@ -135,10 +156,10 @@
           }
         },
         {
-          "id": "houston-heights-value",
+          "id": "houston-inner-loop-value",
           "name": "Value Foods",
-          "latitude": 29.789607,
-          "longitude": -95.413314,
+          "latitude": 29.7448,
+          "longitude": -95.3748,
           "shopping_minutes": 16,
           "prices": {
             "milk": 327,
@@ -152,10 +173,10 @@
           }
         },
         {
-          "id": "houston-heights-fresh",
+          "id": "houston-inner-loop-fresh",
           "name": "Fresh Stop",
-          "latitude": 29.803531,
-          "longitude": -95.382777,
+          "latitude": 29.7492,
+          "longitude": -95.3532,
           "shopping_minutes": 12,
           "prices": {
             "milk": 431,
@@ -178,217 +199,56 @@
         "drive_parking_minutes_per_stop": 3
       },
       "provenance": {
-        "housing": "Home coordinates come from a public-display CoStar record in the supplied historical Houston kit. Not household financial data.",
+        "housing": "Coordinates, monthly asking rent, bedrooms and living area come from an explicit public-display CoStar rental record. The source recorded an active or under-contract listing; current availability is not verified. The homes differ in size and features, so this is not a like-for-like housing valuation.",
         "prices": "All store prices are simulated, not live or verified quotes. Prices include any modeled tax; no discounts or availability variation.",
-        "travel": "Distance-based travel and shopping time estimates; not routing directions, live traffic, or transit service.",
-        "stores": "All five stores are fictional simulation locations around the selected home.",
-        "budget": "Assigned shopping allowance, not an income estimate from property value."
-      }
+        "travel": "Distance-based travel, parking and shopping estimates, including the return home; not routing directions, live traffic, pedestrian access or transit.",
+        "stores": "All five stores are fictional, fixed locations in one shared Houston world. Their coordinates, IDs and prices do not change when the home changes.",
+        "budget": "The same hypothetical shopping allowance and time budget apply to every starting home; neither is inferred from rent or property value.",
+        "housing_fees": "Additional housing fees and utilities are unknown, not zero. Recorded rent is not an all-in monthly housing cost."
+      },
+      "version": "7876301c5d8dd78d16f7973ad4cb5c6dd5a18441e00265d83f66f59f39d2171b"
     },
     {
-      "id": "houston-montrose",
-      "version": "64beb5d527fc",
-      "name": "Montrose shopping challenge",
-      "description": "Complete the same eight-item basket from a home near Montrose. Decide what convenience is worth to you.",
+      "id": "houston-rental-central",
+      "name": "Central · Ruthven Street shopping challenge",
+      "description": "Shop the same eight-item basket at the same five fictional stores. Only your recorded rental starting point changes.",
+      "world_id": "houston-inner-loop",
+      "world_version": "d28a11f41d8b6d82ec38ca9aa512736b803b41acf5d4544daa716abf77a70090",
       "home": {
-        "label": "Your Montrose starting point",
-        "latitude": 29.74893,
-        "longitude": -95.39759,
-        "housing_context": "Recorded Houston home location. No resident income or spending is inferred.",
+        "label": "Your central starting point",
+        "latitude": 29.755274,
+        "longitude": -95.3759,
         "source": "costar",
-        "source_record_id": "218324697",
+        "source_record_id": "232112148",
         "source_dataset": "residential-listings",
-        "recorded_address": "2100 Commonwealth Street",
-        "housing_price_usd": null,
-        "housing_price_basis": "sale_asking"
+        "source_property_id": "500020510363",
+        "source_residential_listing_id": "218287553",
+        "source_permission_homes": 10,
+        "source_transaction_type": 2,
+        "source_listing_status": 1,
+        "source_monetary_unit": 1,
+        "source_listing_date": "2026-08-06T00:00:00+00:00",
+        "source_dom_date": "2026-10-01T00:00:00+00:00",
+        "source_snapshot_date": null,
+        "current_availability_verified": false,
+        "recorded_address": "732 Ruthven Street",
+        "unit_number": null,
+        "bedrooms_min": 2,
+        "bedrooms_max": 2,
+        "living_area_sqft_min": 2597.0,
+        "living_area_sqft_max": 2597.0,
+        "monthly_rent_cents": 320000,
+        "housing_price_usd": 3200.0,
+        "housing_price_basis": "monthly_rent",
+        "additional_monthly_fees_cents": null,
+        "additional_monthly_fees_status": "unknown",
+        "all_in_monthly_housing_cost_cents": null,
+        "source_fingerprint": "917e7c018dac7821b4e92cfc4569ab5367290ea50ac4263281a5028feae9eaea",
+        "housing_context": "Recorded asking rent: $3,200.00/month at 732 Ruthven Street. 2 bedrooms; 2,597 sq ft. Historical listing context; current availability and additional fees are unverified. No resident income or shopping allowance is inferred."
       },
       "defaults": {
-        "budget_cents": 6000,
-        "time_budget_minutes": 50,
-        "travel_mode": "walk",
-        "max_stores": 2
-      },
-      "basket": [
-        {
-          "id": "milk",
-          "name": "Milk",
-          "quantity": 1,
-          "unit": "1 gallon",
-          "category": "Dairy"
-        },
-        {
-          "id": "eggs",
-          "name": "Eggs",
-          "quantity": 1,
-          "unit": "dozen",
-          "category": "Dairy"
-        },
-        {
-          "id": "bread",
-          "name": "Whole-wheat bread",
-          "quantity": 2,
-          "unit": "loaf",
-          "category": "Bakery"
-        },
-        {
-          "id": "rice",
-          "name": "Rice",
-          "quantity": 1,
-          "unit": "2 lb bag",
-          "category": "Pantry"
-        },
-        {
-          "id": "chicken",
-          "name": "Chicken",
-          "quantity": 2,
-          "unit": "1 lb",
-          "category": "Protein"
-        },
-        {
-          "id": "apples",
-          "name": "Apples",
-          "quantity": 2,
-          "unit": "1 lb",
-          "category": "Produce"
-        },
-        {
-          "id": "greens",
-          "name": "Salad greens",
-          "quantity": 1,
-          "unit": "bag",
-          "category": "Produce"
-        },
-        {
-          "id": "coffee",
-          "name": "Ground coffee",
-          "quantity": 1,
-          "unit": "12 oz bag",
-          "category": "Pantry"
-        }
-      ],
-      "stores": [
-        {
-          "id": "houston-montrose-corner",
-          "name": "Corner Market",
-          "latitude": 29.749649,
-          "longitude": -95.395935,
-          "shopping_minutes": 7,
-          "prices": {
-            "milk": 519,
-            "eggs": 428,
-            "bread": 389,
-            "rice": 493,
-            "chicken": 844,
-            "apples": 324,
-            "greens": 428,
-            "coffee": 1169
-          }
-        },
-        {
-          "id": "houston-montrose-grove",
-          "name": "Grove Grocer",
-          "latitude": 29.751625,
-          "longitude": -95.402556,
-          "shopping_minutes": 10,
-          "prices": {
-            "milk": 419,
-            "eggs": 342,
-            "bread": 329,
-            "rice": 398,
-            "chicken": 701,
-            "apples": 204,
-            "greens": 263,
-            "coffee": 989
-          }
-        },
-        {
-          "id": "houston-montrose-pantry",
-          "name": "Pantry & Co.",
-          "latitude": 29.745516,
-          "longitude": -95.390865,
-          "shopping_minutes": 11,
-          "prices": {
-            "milk": 379,
-            "eggs": 355,
-            "bread": 239,
-            "rice": 280,
-            "chicken": 727,
-            "apples": 274,
-            "greens": 362,
-            "coffee": 674
-          }
-        },
-        {
-          "id": "houston-montrose-value",
-          "name": "Value Foods",
-          "latitude": 29.742642,
-          "longitude": -95.411041,
-          "shopping_minutes": 16,
-          "prices": {
-            "milk": 327,
-            "eggs": 270,
-            "bread": 248,
-            "rice": 318,
-            "chicken": 532,
-            "apples": 214,
-            "greens": 283,
-            "coffee": 791
-          }
-        },
-        {
-          "id": "houston-montrose-fresh",
-          "name": "Fresh Stop",
-          "latitude": 29.756566,
-          "longitude": -95.380518,
-          "shopping_minutes": 12,
-          "prices": {
-            "milk": 431,
-            "eggs": 296,
-            "bread": 299,
-            "rice": 417,
-            "chicken": 454,
-            "apples": 174,
-            "greens": 230,
-            "coffee": 944
-          }
-        }
-      ],
-      "travel": {
-        "method": "modeled_distance",
-        "road_factor": 1.3,
-        "walk_kmh": 4.5,
-        "drive_kmh": 24,
-        "drive_cost_cents_per_km": 25,
-        "drive_parking_minutes_per_stop": 3
-      },
-      "provenance": {
-        "housing": "Home coordinates come from a public-display CoStar record in the supplied historical Houston kit. Not household financial data.",
-        "prices": "All store prices are simulated, not live or verified quotes. Prices include any modeled tax; no discounts or availability variation.",
-        "travel": "Distance-based travel and shopping time estimates; not routing directions, live traffic, or transit service.",
-        "stores": "All five stores are fictional simulation locations around the selected home.",
-        "budget": "Assigned shopping allowance, not an income estimate from property value."
-      }
-    },
-    {
-      "id": "houston-eastwood",
-      "version": "235928634114",
-      "name": "Eastwood shopping challenge",
-      "description": "Complete the same eight-item basket from a home near Eastwood. Decide what convenience is worth to you.",
-      "home": {
-        "label": "Your Eastwood starting point",
-        "latitude": 29.739258,
-        "longitude": -95.328842,
-        "housing_context": "Recorded asking sale price: $694,888. Historical listing context; no resident income is inferred.",
-        "source": "costar",
-        "source_record_id": "238666323",
-        "source_dataset": "residential-listings",
-        "recorded_address": "4708 Mckinney Street",
-        "housing_price_usd": 694888.0,
-        "housing_price_basis": "sale_asking"
-      },
-      "defaults": {
-        "budget_cents": 5500,
-        "time_budget_minutes": 35,
+        "budget_cents": 6500,
+        "time_budget_minutes": 45,
         "travel_mode": "drive",
         "max_stores": 2
       },
@@ -452,10 +312,10 @@
       ],
       "stores": [
         {
-          "id": "houston-eastwood-corner",
+          "id": "houston-inner-loop-corner",
           "name": "Corner Market",
-          "latitude": 29.739977,
-          "longitude": -95.327187,
+          "latitude": 29.7576,
+          "longitude": -95.3976,
           "shopping_minutes": 7,
           "prices": {
             "milk": 519,
@@ -469,10 +329,10 @@
           }
         },
         {
-          "id": "houston-eastwood-grove",
+          "id": "houston-inner-loop-grove",
           "name": "Grove Grocer",
-          "latitude": 29.741953,
-          "longitude": -95.333808,
+          "latitude": 29.7565,
+          "longitude": -95.381,
           "shopping_minutes": 10,
           "prices": {
             "milk": 419,
@@ -486,10 +346,10 @@
           }
         },
         {
-          "id": "houston-eastwood-pantry",
+          "id": "houston-inner-loop-pantry",
           "name": "Pantry & Co.",
-          "latitude": 29.735844,
-          "longitude": -95.322117,
+          "latitude": 29.752,
+          "longitude": -95.358,
           "shopping_minutes": 11,
           "prices": {
             "milk": 379,
@@ -503,10 +363,10 @@
           }
         },
         {
-          "id": "houston-eastwood-value",
+          "id": "houston-inner-loop-value",
           "name": "Value Foods",
-          "latitude": 29.73297,
-          "longitude": -95.342291,
+          "latitude": 29.7448,
+          "longitude": -95.3748,
           "shopping_minutes": 16,
           "prices": {
             "milk": 327,
@@ -520,10 +380,10 @@
           }
         },
         {
-          "id": "houston-eastwood-fresh",
+          "id": "houston-inner-loop-fresh",
           "name": "Fresh Stop",
-          "latitude": 29.746894,
-          "longitude": -95.311772,
+          "latitude": 29.7492,
+          "longitude": -95.3532,
           "shopping_minutes": 12,
           "prices": {
             "milk": 431,
@@ -546,12 +406,221 @@
         "drive_parking_minutes_per_stop": 3
       },
       "provenance": {
-        "housing": "Home coordinates come from a public-display CoStar record in the supplied historical Houston kit. Not household financial data.",
+        "housing": "Coordinates, monthly asking rent, bedrooms and living area come from an explicit public-display CoStar rental record. The source recorded an active or under-contract listing; current availability is not verified. The homes differ in size and features, so this is not a like-for-like housing valuation.",
         "prices": "All store prices are simulated, not live or verified quotes. Prices include any modeled tax; no discounts or availability variation.",
-        "travel": "Distance-based travel and shopping time estimates; not routing directions, live traffic, or transit service.",
-        "stores": "All five stores are fictional simulation locations around the selected home.",
-        "budget": "Assigned shopping allowance, not an income estimate from property value."
-      }
+        "travel": "Distance-based travel, parking and shopping estimates, including the return home; not routing directions, live traffic, pedestrian access or transit.",
+        "stores": "All five stores are fictional, fixed locations in one shared Houston world. Their coordinates, IDs and prices do not change when the home changes.",
+        "budget": "The same hypothetical shopping allowance and time budget apply to every starting home; neither is inferred from rent or property value.",
+        "housing_fees": "Additional housing fees and utilities are unknown, not zero. Recorded rent is not an all-in monthly housing cost."
+      },
+      "version": "56a74e8d4f882935ad9113fb5e1afb57432289d6ed8db0e6ba17171924a72c09"
+    },
+    {
+      "id": "houston-rental-east",
+      "name": "East · Polk Street shopping challenge",
+      "description": "Shop the same eight-item basket at the same five fictional stores. Only your recorded rental starting point changes.",
+      "world_id": "houston-inner-loop",
+      "world_version": "d28a11f41d8b6d82ec38ca9aa512736b803b41acf5d4544daa716abf77a70090",
+      "home": {
+        "label": "Your east starting point",
+        "latitude": 29.748008,
+        "longitude": -95.354675,
+        "source": "costar",
+        "source_record_id": "238679692",
+        "source_dataset": "residential-listings",
+        "source_property_id": "86864",
+        "source_residential_listing_id": "222773404",
+        "source_permission_homes": 10,
+        "source_transaction_type": 2,
+        "source_listing_status": 1,
+        "source_monetary_unit": 1,
+        "source_listing_date": "2026-10-21T00:00:00+00:00",
+        "source_dom_date": "2026-10-22T00:00:00+00:00",
+        "source_snapshot_date": null,
+        "current_availability_verified": false,
+        "recorded_address": "2323 Polk Street",
+        "unit_number": "205",
+        "bedrooms_min": 2,
+        "bedrooms_max": 2,
+        "living_area_sqft_min": 1312.0,
+        "living_area_sqft_max": 1312.0,
+        "monthly_rent_cents": 249900,
+        "housing_price_usd": 2499.0,
+        "housing_price_basis": "monthly_rent",
+        "additional_monthly_fees_cents": null,
+        "additional_monthly_fees_status": "unknown",
+        "all_in_monthly_housing_cost_cents": null,
+        "source_fingerprint": "a92d44b8f491ebd911fcc29df0dae5a1d8c2154641f196933cd2c730929f6330",
+        "housing_context": "Recorded asking rent: $2,499.00/month at 2323 Polk Street, unit 205. 2 bedrooms; 1,312 sq ft. Historical listing context; current availability and additional fees are unverified. No resident income or shopping allowance is inferred."
+      },
+      "defaults": {
+        "budget_cents": 6500,
+        "time_budget_minutes": 45,
+        "travel_mode": "drive",
+        "max_stores": 2
+      },
+      "basket": [
+        {
+          "id": "milk",
+          "name": "Milk",
+          "quantity": 1,
+          "unit": "1 gallon",
+          "category": "Dairy"
+        },
+        {
+          "id": "eggs",
+          "name": "Eggs",
+          "quantity": 1,
+          "unit": "dozen",
+          "category": "Dairy"
+        },
+        {
+          "id": "bread",
+          "name": "Whole-wheat bread",
+          "quantity": 2,
+          "unit": "loaf",
+          "category": "Bakery"
+        },
+        {
+          "id": "rice",
+          "name": "Rice",
+          "quantity": 1,
+          "unit": "2 lb bag",
+          "category": "Pantry"
+        },
+        {
+          "id": "chicken",
+          "name": "Chicken",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Protein"
+        },
+        {
+          "id": "apples",
+          "name": "Apples",
+          "quantity": 2,
+          "unit": "1 lb",
+          "category": "Produce"
+        },
+        {
+          "id": "greens",
+          "name": "Salad greens",
+          "quantity": 1,
+          "unit": "bag",
+          "category": "Produce"
+        },
+        {
+          "id": "coffee",
+          "name": "Ground coffee",
+          "quantity": 1,
+          "unit": "12 oz bag",
+          "category": "Pantry"
+        }
+      ],
+      "stores": [
+        {
+          "id": "houston-inner-loop-corner",
+          "name": "Corner Market",
+          "latitude": 29.7576,
+          "longitude": -95.3976,
+          "shopping_minutes": 7,
+          "prices": {
+            "milk": 519,
+            "eggs": 428,
+            "bread": 389,
+            "rice": 493,
+            "chicken": 844,
+            "apples": 324,
+            "greens": 428,
+            "coffee": 1169
+          }
+        },
+        {
+          "id": "houston-inner-loop-grove",
+          "name": "Grove Grocer",
+          "latitude": 29.7565,
+          "longitude": -95.381,
+          "shopping_minutes": 10,
+          "prices": {
+            "milk": 419,
+            "eggs": 342,
+            "bread": 329,
+            "rice": 398,
+            "chicken": 701,
+            "apples": 204,
+            "greens": 263,
+            "coffee": 989
+          }
+        },
+        {
+          "id": "houston-inner-loop-pantry",
+          "name": "Pantry & Co.",
+          "latitude": 29.752,
+          "longitude": -95.358,
+          "shopping_minutes": 11,
+          "prices": {
+            "milk": 379,
+            "eggs": 355,
+            "bread": 239,
+            "rice": 280,
+            "chicken": 727,
+            "apples": 274,
+            "greens": 362,
+            "coffee": 674
+          }
+        },
+        {
+          "id": "houston-inner-loop-value",
+          "name": "Value Foods",
+          "latitude": 29.7448,
+          "longitude": -95.3748,
+          "shopping_minutes": 16,
+          "prices": {
+            "milk": 327,
+            "eggs": 270,
+            "bread": 248,
+            "rice": 318,
+            "chicken": 532,
+            "apples": 214,
+            "greens": 283,
+            "coffee": 791
+          }
+        },
+        {
+          "id": "houston-inner-loop-fresh",
+          "name": "Fresh Stop",
+          "latitude": 29.7492,
+          "longitude": -95.3532,
+          "shopping_minutes": 12,
+          "prices": {
+            "milk": 431,
+            "eggs": 296,
+            "bread": 299,
+            "rice": 417,
+            "chicken": 454,
+            "apples": 174,
+            "greens": 230,
+            "coffee": 944
+          }
+        }
+      ],
+      "travel": {
+        "method": "modeled_distance",
+        "road_factor": 1.3,
+        "walk_kmh": 4.5,
+        "drive_kmh": 24,
+        "drive_cost_cents_per_km": 25,
+        "drive_parking_minutes_per_stop": 3
+      },
+      "provenance": {
+        "housing": "Coordinates, monthly asking rent, bedrooms and living area come from an explicit public-display CoStar rental record. The source recorded an active or under-contract listing; current availability is not verified. The homes differ in size and features, so this is not a like-for-like housing valuation.",
+        "prices": "All store prices are simulated, not live or verified quotes. Prices include any modeled tax; no discounts or availability variation.",
+        "travel": "Distance-based travel, parking and shopping estimates, including the return home; not routing directions, live traffic, pedestrian access or transit.",
+        "stores": "All five stores are fictional, fixed locations in one shared Houston world. Their coordinates, IDs and prices do not change when the home changes.",
+        "budget": "The same hypothetical shopping allowance and time budget apply to every starting home; neither is inferred from rent or property value.",
+        "housing_fees": "Additional housing fees and utilities are unknown, not zero. Recorded rent is not an all-in monthly housing cost."
+      },
+      "version": "b840b82186e972867fadd38a7d3fdb52b549696a18e7d988c76c9a5fb088c49e"
     }
   ]
 }
