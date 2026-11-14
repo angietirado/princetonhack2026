@@ -14,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from spending_api.lab_audit import register_audit_routes
 from spending_api.lab_chat import register_chat_routes
 from spending_api.lab_financial import (
     attach_wallet, create_financial_catalog, financial_evaluate, financial_recommend,
@@ -236,6 +237,7 @@ def create_app(
     register_chat_routes(
         app, store, interpreter=chat_interpreter, timeout_seconds=chat_timeout_seconds
     )
+    register_audit_routes(app, store, require_admin)
     register_financial_routes(app, store, wallet_profiles)
     register_investigation_routes(
         app, store, interpreter=investigation_interpreter,

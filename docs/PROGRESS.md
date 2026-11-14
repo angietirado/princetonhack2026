@@ -13,6 +13,9 @@ Updated November 14, 2026. Continuous development remains active until the user 
 - `7bfe37d`: mobile analytics session access from the first table column.
 - `ea9500d`: deterministic decision investigation and optional bounded LangChain evidence selection.
 - `5b5afa5`: frozen synthetic wallets, dated cash projections and a read-only Nessie adapter.
+- `1123f6e`: recorded home facts in the participant interface.
+- `9c2a81a`: wallet guards across all shopping paths and persistent authenticated investigations.
+- `b897283`: optional wallet selection, cash breakdown and one-trip preview with independent UI review.
 
 ## Working in the apps
 
@@ -22,9 +25,9 @@ Updated November 14, 2026. Continuous development remains active until the user 
 - Chat: four-node LangGraph, strict offline commands, optional model interpretation, persistent history and explicit proposal/apply/save steps.
 - Three rental homes share identical fictional store locations and prices. Recorded rents remain historical context; they do not imply household income.
 
-## Verified foundations awaiting interface integration
+## Additional verified capabilities
 
-- Wallets distinguish checking cash, pending holds, scheduled bills and unused credit. Unknown bill timing or ambiguous payment links produce `needs_review`, not an invented allowance.
+- Participants can optionally select a fictional wallet. Wallets distinguish checking cash, pending holds, scheduled bills and unused credit. Unknown bill timing or ambiguous payment links produce `needs_review`, not an invented allowance.
 - The read-only Nessie adapter pins one customer, validates account scope, bounds pagination and verifies cash consistency. Tests use mocked HTTP; no live credentials or bank writes were used.
 - Investigation computes complete-basket evidence, exact minimum changes and bounded alternatives. Protected limits, current cash and available transport restrict all proposals.
 - Optional LangChain tools inspect evidence, test allowed changes and compare verified plans. The model can select evidence and questions, not invent amounts or save choices.
@@ -34,8 +37,10 @@ Updated November 14, 2026. Continuous development remains active until the user 
 - Original checkpoint: 71 backend/chat/scenario tests, 25 interface tests and 8 real-browser tests passed.
 - Shared-world checkpoint: 96 backend/chat/scenario tests passed; full HTTP demo flow passed after deployment.
 - Wallet/Nessie foundation: 89 tests passed through Docker.
-- Investigation foundation: 24 tests passed through Docker; expanded transport/tool-limit cases are queued for the next verification.
-- Mobile analytics refinement: 25 interface tests and 2 targeted real-browser flows passed.
+- Full wallet/investigation backend integration: 266 tests passed through Docker, including the expanded 35-case investigation engine suite.
+- Audit foundation and existing backend routes: 44 targeted tests passed. The live demo-data audit analyzed 41 initial choices in 22 separate cohorts; counts may grow as demo tests run.
+- Latest participant/analytics interface suite: 37 tests passed. All 10 real-browser cases passed across the full run and targeted reruns after a selector correction; wallet and chat copy fixes were rechecked.
+- Independent wallet visual review found no clipping or functional blocker; both identified copy issues were fixed. See WALLET_UI_REVIEW.md.
 - Native desktop browser initialization failed with Windows access denied; actual Chromium testing and screenshots use isolated Playwright Docker.
 - Automated checks create only clearly marked demo sessions, never genuine participant observations. Existing data volumes are preserved.
 
