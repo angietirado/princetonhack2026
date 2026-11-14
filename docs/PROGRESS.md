@@ -1,46 +1,54 @@
 # Blockwise development progress
-Updated November14, 2026. Continuous development remains active until the user says to stop.
 
-## Workspace
-- Separate clone: Documents/repo/2026princetonhacks-2.
-- Branch: feature/houston-shopping-lab; original base09a62d8.
-- Original repository untouched by this task.
-- Private .env copied directly without reading; copied CoStar and existing .data preserved.
-- Distinct Docker project blockwise-lab, volume lab-data, ports5183/5184/8775.
+Updated November 14, 2026. Continuous development remains active until the user says to stop.
 
-## Working
-- Participant app: scenarios, consent, money/time/transport/stop constraints, basket selection, evaluated totals, first choice, recommendations, revised choice, resume and demo mode.
-- Analytics app: participant/demo/all filter, scenarios, paired metrics, charts, sessions/history, authenticated CSV export.
-- Backend: validated integer-cents calculations, complete-trip estimates, exhaustive one/two-store plans, durable SQLite snapshots and idempotent choices.
-- Conversational backend: four-node LangGraph, strict offline commands, optional provider interpretation, persistent history/constraints, safe retry/concurrency handling.
-- Removed inherited old dashboard/React scaffold, Photon integration, legacy banking API and old generator from active fork; all remain in original/history.
+## Workspace and checkpoints
 
-## Verified
--71 backend/chat/scenario tests passed through Docker.
--25 dashboard regression tests passed, including participant chat and analytics label fixes.
--Both frontend HTTP services and complete demo API flow passed smoke after backend upgrade.
--Final independent browser suite:8of8 passed after fixing mobile analytics overflow; includes chat proposal/apply/save/reload and all earlier flows.
--Additional desktop/mobile recommendations browser flow passed.
--Native desktop browser tool failed with Windows GetCursorPos access denied; visual tests run in isolated Playwright Docker instead.
--18 explicit demo sessions seeded, plus clearly marked QA sessions. No automated tests create genuine participant observations.
+- Separate clone: `Documents/repo/2026princetonhacks-2`, branch `feature/houston-shopping-lab`.
+- Original base: `09a62d8`. The original repository is untouched by this task.
+- Private `.env` copied directly without reading. The copied CoStar kit and existing `.data` are preserved.
+- Docker project `blockwise-lab`, persistent volume `lab-data`, ports 5183 / 5184 / 8775.
+- `a8fa198`: working participant and analytics MVP, with persistent choices, chat and regression coverage.
+- `cf9ae50`: one fixed Houston store world across three recorded rental homes.
+- `7bfe37d`: mobile analytics session access from the first table column.
+- `ea9500d`: deterministic decision investigation and optional bounded LangChain evidence selection.
+- `5b5afa5`: frozen synthetic wallets, dated cash projections and a read-only Nessie adapter.
 
-## Active agents / work
-- Participant chat UI and mobile improvements completed and verified.
-- UI/UX and testing agent: independent real-browser checks and screenshots; findings in UI_REVIEW.md.
-- Backend agent: read-only Nessie adapter and deterministic financial-context projection.
-- Root: integration, documentation, source preservation, verification, scenario/world improvements.
-- Separate creative-integration agent reviewed the app and full hacker packet; direction captured in PRODUCT_DIRECTION.md.
+## Working in the apps
 
-## Current priorities
-1. Participant chat UI and final mobile fixes verified; committing the first milestone.
-2. Checkpoint a working two-app MVP.
-3. Add a synthetic Nessie financial context with explicit provenance and cashflow assumptions.
-4. Replace home-relative fictional store patterns with a fixed shared world before housing/location comparisons.
-5. Implement useful adaptive decision investigation; choose the harness for the task.
-6. Consider Photon only where the channel improves participation. Matterport and Vexcel have no current product need and are outside the roadmap.
+- Participant: consent, home selection, money/time/transport/stop constraints, complete basket selection, canonical totals, first choice, alternatives, revisions, resume and explicit demo mode.
+- Analytics: participant/demo/all filters, scenario filters, paired metrics, charts, session history and CSV export. Authentication is available for analytics.
+- Backend: integer-cents arithmetic, complete round trips, exhaustive one/two-store plans and durable SQLite snapshots with idempotent writes.
+- Chat: four-node LangGraph, strict offline commands, optional model interpretation, persistent history and explicit proposal/apply/save steps.
+- Three rental homes share identical fictional store locations and prices. Recorded rents remain historical context; they do not imply household income.
 
-## Latest user steering
-Consider all angles; no specific track is selected. Photon may be useful and is no longer explicitly excluded.
-No live provider calls, sandbox-bank writes, external messages, public deployment, or submission have been performed.
+## Verified foundations awaiting interface integration
 
-User requires a commit after every verified milestone. Natural integration takes priority over sponsor coverage.
+- Wallets distinguish checking cash, pending holds, scheduled bills and unused credit. Unknown bill timing or ambiguous payment links produce `needs_review`, not an invented allowance.
+- The read-only Nessie adapter pins one customer, validates account scope, bounds pagination and verifies cash consistency. Tests use mocked HTTP; no live credentials or bank writes were used.
+- Investigation computes complete-basket evidence, exact minimum changes and bounded alternatives. Protected limits, current cash and available transport restrict all proposals.
+- Optional LangChain tools inspect evidence, test allowed changes and compare verified plans. The model can select evidence and questions, not invent amounts or save choices.
+
+## Verification
+
+- Original checkpoint: 71 backend/chat/scenario tests, 25 interface tests and 8 real-browser tests passed.
+- Shared-world checkpoint: 96 backend/chat/scenario tests passed; full HTTP demo flow passed after deployment.
+- Wallet/Nessie foundation: 89 tests passed through Docker.
+- Investigation foundation: 24 tests passed through Docker; expanded transport/tool-limit cases are queued for the next verification.
+- Mobile analytics refinement: 25 interface tests and 2 targeted real-browser flows passed.
+- Native desktop browser initialization failed with Windows access denied; actual Chromium testing and screenshots use isolated Playwright Docker.
+- Automated checks create only clearly marked demo sessions, never genuine participant observations. Existing data volumes are preserved.
+
+## Active work
+
+1. Expose recorded home facts clearly in the participant interface.
+2. Connect optional synthetic wallet profiles to session creation, evaluation, recommendations and chat.
+3. Add authenticated, retry-safe investigation reports and an explicit participant interaction.
+4. Repeat independent UI/UX and browser review as each visible feature becomes usable.
+5. Continue improving the experiment and analytics based on verified behavior; commit every milestone.
+
+## Product direction
+
+Natural integration takes priority over sponsor coverage. No track has been selected. Photon remains an option when messaging improves participation. Matterport and Vexcel have no current product need and are outside the roadmap.
+
+Inherited dashboard, React scaffold, Photon backend and legacy banking code were pruned from this fork; they remain in the original repository and Git history. No public deployment, repository publication, external messages or hackathon submission has been performed.

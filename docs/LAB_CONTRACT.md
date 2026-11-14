@@ -1,5 +1,5 @@
 # Shopping Lab implementation contract
-Status: initial integration contract, 2026-11-14. Root owns this document. Product name: Blockwise.
+Status: core integration contract, 2026-11-14. Root owns this document. Product name: Blockwise. Active task assignments supersede the original ownership list below.
 Development only in C:/Users/qcdre/Documents/repo/2026princetonhacks-2, branch feature/houston-shopping-lab.
 Never edit the source sibling princetonhack2026. Never read private .env. It was copied as authorized.
 
@@ -12,10 +12,10 @@ Use vanilla HTML/CSS/JS, no bundler. Apps are distinct nginx containers, same ba
 Participant localhost:5183, analytics localhost:5184, backend localhost:8775. Compose project blockwise-lab.
 All monetary amounts integer USD cents. Durations numeric minutes, display rounded but feasibility uses actual model.
 
-## Scenario seed shape (root writes data/scenarios.json)
-{"schema_version":1,"scenarios":[{"id":"houston-heights","version":"v1","name":"Heights weekday shop","description":"...","home":{"label":"...","latitude":29.8,"longitude":-95.4,"housing_context":"...","source":"costar","source_record_id":"..."},"defaults":{"budget_cents":7000,"time_budget_minutes":45,"travel_mode":"drive","max_stores":2},"basket":[{"id":"milk","name":"Milk","quantity":1,"unit":"1 gallon","category":"Dairy"}],"stores":[{"id":"corner","name":"Corner Market","latitude":29.81,"longitude":-95.41,"shopping_minutes":8,"prices":{"milk":420}}],"travel":{"method":"modeled_distance","road_factor":1.3,"walk_kmh":4.5,"drive_kmh":24,"drive_cost_cents_per_km":25,"drive_parking_minutes_per_stop":3},"provenance":{"housing":"Recorded CoStar location; not household financial data.","prices":"Simulated store prices, not live quotes.","travel":"Modeled travel estimates, not routing directions.","stores":"Simulated stores placed near the selected home."}}]}
+## Scenario seed shape (illustrative original shape; current catalog in data/scenarios.json)
+{"schema_version":1,"scenarios":[{"id":"houston-heights","version":"v1","name":"Heights weekday shop","description":"...","home":{"label":"...","latitude":29.8,"longitude":-95.4,"housing_context":"...","source":"costar","source_record_id":"..."},"defaults":{"budget_cents":7000,"time_budget_minutes":45,"travel_mode":"drive","max_stores":2},"basket":[{"id":"milk","name":"Milk","quantity":1,"unit":"1 gallon","category":"Dairy"}],"stores":[{"id":"corner","name":"Corner Market","latitude":29.81,"longitude":-95.41,"shopping_minutes":8,"prices":{"milk":420}}],"travel":{"method":"modeled_distance","road_factor":1.3,"walk_kmh":4.5,"drive_kmh":24,"drive_cost_cents_per_km":25,"drive_parking_minutes_per_stop":3},"provenance":{"housing":"Recorded CoStar location; not household financial data.","prices":"Simulated store prices, not live quotes.","travel":"Modeled travel estimates, not routing directions.","stores":"One fixed shared fictional store world; stores do not move with the home."}}]}
 Per-item price is per stated unit times quantity. All stores supply basket initially. Max 5 stores, <=10 products, <=2 stops.
-CoStar is home geographic grounding; fictional stores explicit. Each scenario real home and price/time tradeoffs.
+CoStar grounds home locations and recorded rents; fictional stores remain explicit. Current IDs are houston-rental-west, houston-rental-central and houston-rental-east. All share world_id/world_version, stores, basket and defaults; see WORLD.md. Housing fees and all-in costs are unknown, and rent does not set income or shopping budget.
 Only local small scenario seed is shipped in image, never entire dataset/.env.
 Scenario source version immutable fingerprint on session; store scenario snapshot in SQLite session to preserve old experiments.
 

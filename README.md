@@ -15,7 +15,7 @@ The original repository and its running containers are independent.
 Stop with `docker compose --env-file .env.example down`; do not add `--volumes` unless intentionally deleting collected sessions.
 
 ## What is real, and what is simulated?
-Selected home coordinates come from public-display records in the supplied historical Houston CoStar kit.
+Selected home coordinates and recorded monthly rents come from public-display records in the supplied historical Houston CoStar kit. The three homes share one fixed fictional store world, so changing homes changes travel instead of moving the stores.
 Stores, store positions, prices, budgets, and travel assumptions are simulated. Housing values do not determine participant income.
 Participants make real choices inside this experiment; their choices are not actual bank transactions or representative Houston consumer data.
 The fixed basket makes plan comparisons meaningful. Total time includes travel, shopping, parking when driving, and return home.
@@ -32,7 +32,7 @@ No verification command should load it. Photon is being considered as an optiona
 ## Development
 See [implementation contract](docs/LAB_CONTRACT.md) and [progress](docs/PROGRESS.md).
 The small versioned seed at data/scenarios.json is included; the full CoStar kit stays ignored.
-To rebuild the seed from the local kit, run scripts/build_scenarios.py with Python 3.12 or inside a temporary Python container.
+See [the shared-world data notes](docs/WORLD.md) for source fields, assumptions, versioning and the Docker command to regenerate the seed.
 
 ## Demonstration records and browser checks
 Generate explicit demo sessions without creating participant observations:
