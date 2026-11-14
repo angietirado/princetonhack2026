@@ -84,7 +84,7 @@ At `http://127.0.0.1:8765/docs`, authorize with the app token, inspect `GET /api
 
 The sequential LangChain loop offers structured spending-summary, transaction, and recurring-candidate tools. Default limits are 4 model turns, 6 tool calls, 45 seconds, and 1024 output tokens per model call. Tools use integer cents and return bounded evidence. Oversized or malformed tool requests fail closed. Ambient LangSmith tracing is disabled for the request. No tool transfers money, cancels services, sends messages, or executes code.
 
-Every response includes provider/model labels, a snapshot hash, evidence, and coverage caveats. A successful model response is not proof that its prose is correct: structured evidence remains authoritative. No conversation memory is persisted. A failed or limited run is labeled explicitly. The API is not yet connected to the dashboard or Photon worker.
+Every response includes provider/model labels, a snapshot hash, evidence, and coverage caveats. A successful model response is not proof that its prose is correct: structured evidence remains authoritative. No conversation memory is persisted. A failed or limited run is labeled explicitly. The dashboard's **Ask your books** view uses this API and displays tool results separately from the AI interpretation. It sends no question until submitted, keeps the app token only in page memory, and clears questions/evidence on lock or dashboard refresh. Each request needs its own dates and filters; the dashboard date picker is not inherited. The Photon reply worker remains unimplemented.
 
 For an explicit live synthetic smoke test in the configured backend, run:
 

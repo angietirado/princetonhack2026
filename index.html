@@ -73,7 +73,29 @@
           <section class="tax-hero"><div><span class="ask-label">SELECTED PERIOD</span><h2 id="report-total">—</h2><p id="report-period"></p></div><p class="report-description">Completed expenses minus refunds.<br />This report does not estimate tax deductions.</p></section>
           <section class="panel recurring-panel"><h2>Net spending by category</h2><div id="report-categories"></div><p class="chart-note">Negative amounts mean refunds exceeded expenses in that category.</p></section>
         </section>
-        <section class="page hidden" id="ask-view"><div class="page-heading"><div><p class="eyebrow">Next milestone</p><h1>Ask your books</h1><p class="subheading">AI conversations are coming next.</p></div></div><section class="panel empty-feature"><div class="ai-orb">✦</div><h2>Your numbers are ready.</h2><p>Explore the connected spending data in Overview and Insights while we build conversational analysis.</p><button class="dark-button" data-view-link="insights">Open insights →</button></section></section>
+        <section class="page hidden" id="ask-view" aria-labelledby="ask-title">
+          <div class="page-heading"><div><p class="eyebrow">Answers with evidence</p><h1 id="ask-title">Ask your books</h1><p class="subheading">Explore observed spending and inspect the records behind an answer.</p></div></div>
+          <section class="panel ask-compose">
+            <div class="ask-availability"><p id="ask-provider" role="status" aria-live="polite">Check availability to start.</p><button class="outline-button" id="ask-check" type="button">Check availability</button></div>
+            <p class="ask-guidance" id="ask-guidance">Each question starts fresh. Include dates and filters explicitly, including in follow-ups. The dashboard date picker is not applied automatically.</p>
+            <form id="ask-form">
+              <label for="ask-question">Your question</label>
+              <textarea id="ask-question" rows="4" maxlength="2000" required disabled aria-describedby="ask-guidance ask-counter" placeholder="Ask about a specific period, category, or transaction…"></textarea>
+              <div class="ask-actions"><span id="ask-counter">0 / 2000 characters</span><button class="dark-button" id="ask-submit" type="submit" disabled>Ask →</button></div>
+            </form>
+            <div class="ask-examples" aria-label="Fill an example question"><span>Start with an example:</span><button class="outline-button" id="ask-example-spending" type="button" disabled>Spending, with loaded dates</button><button class="outline-button hidden" id="ask-example-housing" type="button" disabled>Apartment search</button></div>
+            <p id="ask-state" class="ask-state" role="status" aria-live="polite"></p>
+            <p id="ask-error" role="alert"></p>
+          </section>
+          <section id="ask-result" class="panel ask-result hidden" aria-labelledby="ask-answer-title">
+            <p class="ask-label" id="ask-outcome"></p><h2 id="ask-answer-title">Answer</h2>
+            <p id="ask-asked-question" class="ask-asked-question"></p>
+            <p id="ask-answer" class="ask-answer-text"></p>
+            <p id="ask-usage" class="ask-meta"></p><p id="ask-source" class="ask-meta"></p>
+            <h3>Limits and caveats</h3><ul id="ask-caveats" class="ask-caveats"></ul>
+            <h3>Supporting evidence</h3><p class="chart-note">These tool results support the AI interpretation above. Expand a record to review exact dates, amounts, IDs, and units.</p><div id="ask-evidence"></div>
+          </section>
+        </section>
         <section class="page hidden" id="settings-view"><div class="page-heading"><div><p class="eyebrow">Workspace</p><h1>Connected accounts</h1><p class="subheading">The same customer is used across every view.</p></div></div><section class="panel"><h2>Data connection</h2><dl class="connection-details"><dt>Source</dt><dd id="connection-source"></dd><dt>Customer</dt><dd id="connection-customer"></dd><dt>Retrieved</dt><dd id="connection-time"></dd></dl><p class="chart-note">Balances reflect the latest account snapshot. Date filters apply to transaction history.</p></section><div class="insight-cards" id="accounts-list"></div></section>
       </div>
     </main>

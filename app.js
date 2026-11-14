@@ -16,6 +16,13 @@
   let sequence = 0;
   let controller = null;
   let toastTimer = null;
+  let askSequence = 0;
+  let askController = null;
+  let askStatus = null;
+  let askStatusLoading = false;
+  let askPending = false;
+  let askTimer = null;
+  let dashboardLoading = false;
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -40,12 +47,14 @@
     const active = document.querySelector('.nav-item[data-view="' + view + '"]');
     $("page-title").textContent = active ? active.getAttribute("aria-label") : "Overview";
     window.scrollTo({ top: 0, behavior: "smooth" });
+    if (view === "ask") void loadAskStatus();
   }
   document.querySelectorAll("[data-view], [data-view-link]").forEach((button) => {
     button.addEventListener("click", () => showView(button.dataset.view || button.dataset.viewLink));
   });
   function clearData() {
     data = null;
+    resetAsk();
     $("dashboard-data").classList.add("hidden");
     for (const id of ["balance-value", "balance-foot", "spend-value", "spend-foot", "credit-value", "credit-foot", "gross-total", "refund-note", "largest-category-title", "largest-category-copy", "largest-category-share", "refund-insight", "pending-insight", "uncategorized-insight", "report-total", "report-period", "connection-source", "connection-customer", "connection-time", "transaction-count", "page-count", "period-caption", "overview-subheading"]) $(id).textContent = "";
     for (const id of ["category-legend", "monthly-chart", "recent-activity", "coverage-details", "transaction-rows", "recurring-list", "report-categories", "accounts-list"]) $(id).replaceChildren();
@@ -58,6 +67,7 @@
     sequence += 1;
     controller?.abort();
     token = "";
+    dashboardLoading = false;
     clearData();
     $("app-token").value = "";
     $("access-error").textContent = "";
@@ -75,6 +85,8 @@
 
   async function refresh() {
     const requestId = ++sequence;
+    dashboardLoading = true;
+    resetAsk();
     controller?.abort();
     controller = new AbortController();
     $("refresh-button").disabled = true;
@@ -107,6 +119,7 @@
         throw new Error("The backend returned an unexpected response. Check that both services are up to date.");
       }
       data = payload;
+      updateAskControls();
       page = 0;
       $("dashboard-data").classList.remove("hidden");
       render();
@@ -124,6 +137,8 @@
       $("source-badge").textContent = "Unavailable";
     } finally {
       if (requestId === sequence) {
+        dashboardLoading = false;
+        updateAskControls();
         $("refresh-button").disabled = false;
         $("unlock-button").disabled = false;
       }
@@ -139,6 +154,212 @@
     token = entered;
     $("app-token").value = "";
     void refresh();
+  });
+
+  function clearAskAnswer() {
+    $("ask-result").classList.add("hidden");
+    for (const id of ["ask-outcome", "ask-asked-question", "ask-answer", "ask-usage", "ask-source"]) $(id).textContent = "";
+    $("ask-caveats").replaceChildren();
+    $("ask-evidence").replaceChildren();
+  }
+  function updateAskControls() {
+    const ready = Boolean(data && !dashboardLoading && askStatus?.enabled && !askStatusLoading && !askPending);
+    $("ask-question").disabled = !ready;
+    $("ask-submit").disabled = !ready || !$("ask-question").value.trim();
+    $("ask-submit").textContent = askPending ? "Working…" : "Ask →";
+    $("ask-check").disabled = !data || dashboardLoading || askPending || askStatusLoading;
+    $("ask-example-spending").disabled = !ready;
+    $("ask-example-housing").disabled = !ready;
+    $("ask-example-housing").classList.toggle("hidden", askStatus?.costar_enabled !== true);
+    $("ask-counter").textContent = $("ask-question").value.length + " / 2000 characters";
+    $("ask-form").setAttribute("aria-busy", String(askPending));
+  }
+  function resetAsk() {
+    askSequence += 1;
+    askController?.abort();
+    clearTimeout(askTimer);
+    askController = null;
+    askStatus = null;
+    askStatusLoading = false;
+    askPending = false;
+    $("ask-question").value = "";
+    $("ask-provider").textContent = "Check availability to start.";
+    $("ask-state").textContent = "";
+    $("ask-error").textContent = "";
+    clearAskAnswer();
+    updateAskControls();
+  }
+  function askAuthHeaders(json = false) {
+    return { ...(token ? { Authorization: "Bearer " + token } : {}), ...(json ? { "Content-Type": "application/json" } : {}) };
+  }
+  function startAskDeadline(requestId, milliseconds, checkingStatus) {
+    clearTimeout(askTimer);
+    askTimer = setTimeout(() => {
+      if (requestId !== askSequence) return;
+      askSequence += 1;
+      askController?.abort();
+      askStatusLoading = false;
+      askPending = false;
+      $("ask-state").textContent = "";
+      if (checkingStatus) $("ask-provider").textContent = "AI availability could not be checked.";
+      $("ask-error").textContent = checkingStatus ? "The availability check timed out. Try checking again." : "The answer request timed out. Check the connection before submitting again.";
+      updateAskControls();
+    }, milliseconds);
+  }
+  async function loadAskStatus(force = false) {
+    if (!data || dashboardLoading || askPending || askStatusLoading || (askStatus && !force)) return;
+    const requestId = ++askSequence;
+    askController?.abort();
+    askController = new AbortController();
+    askStatusLoading = true;
+    askStatus = null;
+    $("ask-provider").textContent = "Checking AI availability…";
+    $("ask-error").textContent = "";
+    updateAskControls();
+    startAskDeadline(requestId, 15000, true);
+    try {
+      const response = await fetch("/api/v1/agent/status", { headers: askAuthHeaders(), cache: "no-store", signal: askController.signal });
+      if (requestId !== askSequence) return;
+      if (response.status === 401) { lock(); $("access-error").textContent = "Unlock with a valid app token to use AI."; return; }
+      if (!response.ok) throw new Error("status unavailable");
+      const status = await response.json();
+      if (requestId !== askSequence) return;
+      if (!status || typeof status.enabled !== "boolean" || typeof status.provider !== "string" || typeof status.model !== "string" || status.provider.length > 160 || status.model.length > 160) throw new Error("invalid status");
+      askStatus = status;
+      $("ask-provider").textContent = status.enabled ? label(status.provider) + " · " + status.model + " · Read-only tools" : "AI is disabled for this workspace. Your spending dashboard remains available.";
+    } catch (error) {
+      if (requestId !== askSequence || error.name === "AbortError") return;
+      $("ask-provider").textContent = "AI availability could not be checked.";
+      $("ask-error").textContent = "Check the backend connection, then check availability again.";
+    } finally {
+      if (requestId === askSequence) { clearTimeout(askTimer); askStatusLoading = false; updateAskControls(); }
+    }
+  }
+  $("ask-check").addEventListener("click", () => void loadAskStatus(true));
+  $("ask-question").addEventListener("input", () => { $("ask-error").textContent = ""; updateAskControls(); });
+  $("ask-example-spending").addEventListener("click", () => {
+    if (!askStatus?.enabled || askPending) return;
+    const start = data?.summary.start || "[start date]";
+    const end = data?.summary.end || "[end date]";
+    $("ask-question").value = "Summarize my observed spending from " + start + " through " + end + " in UTC. Include refunds, exclusions, and missing-history caveats.";
+    updateAskControls();
+    $("ask-question").focus();
+  });
+  $("ask-example-housing").addEventListener("click", () => {
+    if (!askStatus?.enabled || !askStatus.costar_enabled || askPending) return;
+    $("ask-question").value = "Find up to 3 one-bedroom apartments in TX under $1,800 monthly asking rent. Show each full rent range and recorded availability limitations." + (askStatus.matterport_enabled ? " For one unambiguous floor plan, inspect reported room measurements and state the units and missing information." : "");
+    updateAskControls();
+    $("ask-question").focus();
+  });
+  const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  function validAskAnswer(value) {
+    return object(value) && ["answered", "limited", "unavailable"].includes(value.status) &&
+      typeof value.answer === "string" && value.answer.length <= 8000 &&
+      ["provider", "model", "source", "source_hash"].every((key) => typeof value[key] === "string" && value[key].length <= 256) &&
+      ["model_calls", "tool_calls"].every((key) => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 32) &&
+      Array.isArray(value.caveats) && value.caveats.length <= 64 && value.caveats.every((item) => typeof item === "string" && item.length <= 2000) &&
+      Array.isArray(value.evidence) && value.evidence.length <= 12 && value.evidence.every((item) => object(item) && typeof item.tool === "string" && item.tool.length <= 80 && object(item.arguments) && object(item.result)) &&
+      (value.status !== "answered" || value.evidence.some((item) => item.result.status === "ok")) &&
+      JSON.stringify(value).length <= 512000;
+  }
+  const reported = (value, unit) => typeof value === "number" && Number.isFinite(value) ? value + " " + unit : "unknown";
+  function renderToolEvidence(entry) {
+    const result = entry.result;
+    const host = node("article", undefined, "ask-evidence-item");
+    const titles = { summarize_spending: "Observed spending", get_transactions: "Transaction records", find_recurring_charges: "Recurring candidates", costar_search: "Apartment matches", inspect_floor_plan: "Room measurements" };
+    host.append(node("h4", Object.hasOwn(titles, entry.tool) ? titles[entry.tool] : label(entry.tool)));
+    if (result.status !== "ok") {
+      host.append(node("p", "This read did not return usable evidence. No zero total or empty-market conclusion follows."));
+    } else if (entry.tool === "summarize_spending" && Number.isSafeInteger(result.net_spending_cents)) {
+      host.append(node("p", "Observed net spending: " + money(result.net_spending_cents) + ". History completeness is unknown."));
+    } else if (entry.tool === "get_transactions") {
+      host.append(node("p", result.returned_rows + " of " + result.total_rows + " matching observed records returned. Signed contributions and excluded records are in the details."));
+    } else if (entry.tool === "find_recurring_charges") {
+      host.append(node("p", "Pattern candidates only; these do not confirm subscriptions, savings, or a next bill."));
+    } else if (entry.tool === "costar_search" && Array.isArray(result.results)) {
+      host.append(node("p", result.results.length + " recorded matches shown. Availability is not live; the local catalog is not the whole market."));
+      if (result.results.length > 20) host.append(node("p", "The first 20 matches are summarized below; all returned records remain in the exact evidence."));
+      for (const row of result.results.slice(0, 20)) {
+        if (!object(row)) continue;
+        const listing = node("div", undefined, "ask-record");
+        listing.append(node("strong", String(row.property_name ?? "Property") + " · " + String(row.floor_plan_name ?? "Floor plan")));
+        const rent = row.asking_rent;
+        if (object(rent) && rent.currency === "USD" && rent.period === "month" && rent.basis === "per_unit" && Number.isSafeInteger(rent.minimum)) {
+          const dollars = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+          listing.append(node("p", dollars(rent.minimum) + " – " + (Number.isSafeInteger(rent.maximum) ? dollars(rent.maximum) : "upper bound unknown") + " per month, per unit."));
+          if (row.price_range_within_budget !== true) listing.append(node("p", "The full range is not confirmed within the requested budget."));
+        } else listing.append(node("p", "Rent units or range are unavailable; see the exact evidence."));
+        host.append(listing);
+      }
+    } else if (entry.tool === "inspect_floor_plan" && Array.isArray(result.rooms)) {
+      host.append(node("p", "Model " + String(result.model_id ?? "unknown") + ". Missing or zero measurements do not establish room size. Furniture fit and clear routes were not verified."));
+      if (result.rooms_truncated) host.append(node("p", "Only " + result.rooms_returned + " of " + result.room_count + " rooms are displayed."));
+      if (result.rooms.length > 20) host.append(node("p", "The first 20 returned rooms are summarized below; review the exact evidence for the remaining records."));
+      for (const room of result.rooms.slice(0, 20)) {
+        if (!object(room)) continue;
+        const record = node("div", undefined, "ask-record");
+        record.append(node("strong", String(room.label || room.room_id || "Room")));
+        const estimate = room.dimension_estimates;
+        record.append(node("p", object(estimate) ? "Dimension estimate — area: " + reported(estimate.area_square_meters, "square meters") + "; width: " + reported(estimate.width_meters, "meters") + "; depth: " + reported(estimate.depth_meters, "meters") + "." : "Dimension estimates unavailable."));
+        const legacy = room.legacy_dimensions;
+        if (object(legacy)) record.append(node("p", "Legacy estimate — area: " + reported(legacy.area_floor, String(legacy.area_unit).replaceAll("_", " ")) + "; width: " + reported(legacy.width, String(legacy.length_unit)) + "; depth: " + reported(legacy.depth, String(legacy.length_unit)) + "."));
+        host.append(record);
+      }
+    }
+    if (Array.isArray(result.limitations)) {
+      const list = node("ul", undefined, "ask-caveats");
+      for (const item of result.limitations) if (typeof item === "string") list.append(node("li", item));
+      host.append(list);
+    }
+    const details = node("details");
+    details.append(node("summary", "Exact tool evidence"), node("pre", JSON.stringify(entry, null, 2)));
+    host.append(details);
+    return host;
+  }
+  function renderAskAnswer(result, question) {
+    $("ask-outcome").textContent = { answered: "Answered", limited: "Request limit reached", unavailable: "Answer unavailable" }[result.status];
+    $("ask-answer-title").textContent = result.status === "answered" ? "Answer" : "What was completed";
+    $("ask-asked-question").textContent = question;
+    $("ask-answer").textContent = result.answer;
+    $("ask-usage").textContent = label(result.provider) + " · " + result.model + " · " + result.model_calls + " model calls · " + result.tool_calls + " tool reads";
+    $("ask-source").textContent = "Spending source: " + result.source + " · Revision: " + result.source_hash;
+    for (const caveat of result.caveats) $("ask-caveats").append(node("li", caveat));
+    for (const entry of result.evidence) $("ask-evidence").append(renderToolEvidence(entry));
+    if (!result.evidence.length) $("ask-evidence").append(node("p", "No tool evidence was returned."));
+    $("ask-result").classList.remove("hidden");
+  }
+  $("ask-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!data || dashboardLoading || !askStatus?.enabled || askStatusLoading || askPending) return;
+    const question = $("ask-question").value.trim();
+    if (!question || $("ask-question").value.length > 2000) { $("ask-error").textContent = "Enter a question of 1 to 2000 characters."; return; }
+    const requestId = ++askSequence;
+    askController?.abort();
+    askController = new AbortController();
+    askPending = true;
+    clearAskAnswer();
+    $("ask-error").textContent = "";
+    $("ask-state").textContent = "Reading evidence and preparing an answer…";
+    updateAskControls();
+    startAskDeadline(requestId, 130000, false);
+    try {
+      const response = await fetch("/api/v1/agent/answer", { method: "POST", headers: askAuthHeaders(true), body: JSON.stringify({ question }), cache: "no-store", signal: askController.signal });
+      if (requestId !== askSequence) return;
+      if (response.status === 401) { lock(); $("access-error").textContent = "Your app token was not accepted. Unlock again to continue."; return; }
+      if (!response.ok) {
+        $("ask-error").textContent = ({ 429: "An AI request is already running. Wait briefly, then submit again.", 503: "The AI service is unavailable. Check availability before trying again.", 504: "The request reached its time limit. Try a narrower question." })[response.status] || "The backend could not answer this question. Check availability and try again.";
+        return;
+      }
+      const result = await response.json();
+      if (requestId !== askSequence) return;
+      if (!validAskAnswer(result)) throw new Error("invalid answer");
+      renderAskAnswer(result, question);
+    } catch (error) {
+      if (requestId !== askSequence || error.name === "AbortError") return;
+      $("ask-error").textContent = "A valid answer could not be received. Check the connection and try again.";
+    } finally {
+      if (requestId === askSequence) { clearTimeout(askTimer); askPending = false; $("ask-state").textContent = ""; updateAskControls(); }
+    }
   });
 
   function renderCategories() {

@@ -114,10 +114,16 @@ The app reads customer accounts, merchants, and the tenant transaction list, the
 | `GET /api/v1/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD` | Scoped transaction evidence |
 | `GET /api/v1/spending/summary?start=...&end=...` | Spending totals and categories |
 | `GET /api/v1/spending/recurring?start=...&end=...` | Recurring-charge candidates |
+| `GET /api/v1/agent/status` | Optional assistant availability and selected provider |
+| `POST /api/v1/agent/answer` | Bounded LangChain question with read-only tools and evidence |
+| `POST /api/v1/costar/search` | Filter the supplied local apartment catalog with explicit coverage limits |
+| `POST /api/v1/costar/inspect` | Inspect one unambiguous catalog-bound Matterport reference |
 | `POST /webhooks/photon` | Signed provider events; durable receipt only |
 | `GET /docs` and `GET /openapi.json` | Executable API contract |
 
-The served Ledgerly dashboard shows current cash and card balances, gross expenses by category, refunds, monthly net spending, and searchable transactions. Date filters apply to activity and reports, while balances remain current. CSV exports include all filtered rows across table pages. Recurring charges are labeled candidates; AI conversation remains a placeholder until orchestration is implemented. Source labels distinguish Nessie from local synthetic fixtures. The retained React starter is not the Docker default. [Frontend handoff](../apps/frontend/README.md)
+The served Ledgerly dashboard shows current cash and card balances, gross expenses by category, refunds, monthly net spending, and searchable transactions. Date filters apply to activity and reports, while balances remain current. CSV exports include all filtered rows across table pages. Recurring charges are labeled candidates. The opt-in question view separates AI interpretation from exact tool evidence and clears pending/stored page results on lock or refresh. Source labels distinguish Nessie from local synthetic fixtures. The retained React starter is not the Docker default. [Frontend handoff](../apps/frontend/README.md)
+
+The optional apartment workflow combines a local CoStar search with one catalog-bound Matterport read. It preserves recorded rent ranges, model-reference scope, modern versus legacy measurement sources, and returned units. Historical availability is not a live quote; scan area is not proof of furniture clearance. Gemini and NVIDIA Nemotron share a sequential LangChain tool loop with bounded turns, calls, output, and duration. Question requests are independent; the Photon worker and persistent conversation context remain deferred.
 
 ## Data generator
 
@@ -142,7 +148,7 @@ The offline automated checks cover exact money arithmetic, exclusions/refunds, c
 
 ## Next decisions and backlog
 
-- [ ] Choose the AI provider, model, and tool-calling runtime; set a per-question latency and cost budget.
+- [x] Add Gemini and NVIDIA Nemotron through LangChain with per-question turn, tool, time, and output limits.
 - [ ] Choose the demo persona and final app name.
 - [ ] Confirm a provisioned Photon **SMS** number. Shared iMessage service is a separate channel and must be presented as such if used for a fallback demo.
 - [ ] Add the inbox worker, persisted reply/outbox, retry/backoff, and delivery-status handling.
@@ -166,3 +172,5 @@ Stretch ideas: weekly spending digests, category budgets, richer recurring-charg
 | 2026-11-14 | Pin one generated Nessie customer in readable TOML; retain credentials in `.env`; use terminal tools and defer Photon | Keep the MVP dataset stable and remove messaging setup from the critical path |
 | 2026-11-14 | Serve the root Ledgerly prototype and run dashboard regressions through Docker | Make the actual dashboard available through the team's default container workflow |
 | 2026-11-14 | Connect Ledgerly visualizations to one protected FastAPI dashboard response; keep Photon disabled | Present consistent customer-scoped figures, date filters, and exports without fabricated sample totals |
+| 2026-11-14 | Add opt-in LangChain providers, local CoStar search, and catalog-bound Matterport inspection | Connect questions to scoped evidence while keeping missing measurements and historical availability explicit |
+| 2026-11-14 | Connect Ask your books to the question API with separate evidence and incomplete-answer states | Make the implemented tool workflow usable without fabricating conversation history or hiding partial results |

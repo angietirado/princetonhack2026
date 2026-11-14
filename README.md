@@ -100,7 +100,9 @@ In your ignored `.env`, set `GEMINI_API_KEY` or `NVIDIA_API_KEY`, retain or crea
 docker compose --env-file .env -p princeton-langchain-20261114 up --build --detach --wait
 ```
 
-Open **http://127.0.0.1:8765/docs**, choose **Authorize**, enter `APP_API_TOKEN`, and try `POST /api/v1/agent/answer` with `{"question":"Summarize spending from 2026-11-01 through 2026-11-13."}`. `GET /api/v1/agent/status` reports the selected provider without exposing keys. Each question starts a new context; include dates and filters in follow-up requests. The dashboard does not yet display AI chat.
+Open **http://127.0.0.1:5173**, unlock with `APP_API_TOKEN`, and select **Ask your books**. The page checks availability before enabling questions and displays the answer, tool evidence, and limitations. Example buttons fill the question without submitting it. Each question starts a new context: include dates and filters explicitly, including in follow-ups. Dashboard date filters are not applied automatically.
+
+The same interface is available at **http://127.0.0.1:8765/docs**: choose **Authorize**, enter `APP_API_TOKEN`, and invoke `POST /api/v1/agent/answer` with `{"question":"Summarize spending from 2026-11-01 through 2026-11-13."}`. `GET /api/v1/agent/status` reports the selected provider without exposing keys.
 
 The answer's `status` must be `answered` before treating its prose as a completed response. `limited` or `unavailable` responses explain the failure and can include partial tool evidence. Evidence is calculated from observed records; model prose is an interpretation, and missing history is not proof of zero spending. Recurring results remain candidates.
 
@@ -159,7 +161,7 @@ The root `index.html`, `app.js`, and `styles.css` contain the connected Ledgerly
 
 The app token is kept only in page memory, sent in an Authorization header to the same-origin backend, and cleared on lock or reload. Provider keys never reach the browser. The customer stays fixed by `settings.toml`; there is no fake workspace switcher or bank-linking flow. Errors hide old figures instead of substituting sample data.
 
-All amounts are calculated in cents. The category donut shows completed expenses before refunds; monthly bars and reports show net spending after refunds. Current cash balances exclude credit card debt. UTC date filters affect transactions, not current balances. CSV exports preserve the selected period; transaction exports include all matching rows across pages. Recurring charges are labeled candidates. The dashboard does not infer tax deductions or display AI answers.
+All amounts are calculated in cents. The category donut shows completed expenses before refunds; monthly bars and reports show net spending after refunds. Current cash balances exclude credit card debt. UTC date filters affect transactions, not current balances. CSV exports preserve the selected period; transaction exports include all matching rows across pages. Recurring charges are labeled candidates. The dashboard does not infer tax deductions. Opt-in AI answers appear separately with their structured evidence and limitations; locking or refreshing clears the question and answer.
 
 Docker is sufficient for running and checking the dashboard. [Optional native development](docs/LOCAL_DEVELOPMENT.md) is available for working on the Python and React scaffolds without containers.
 
