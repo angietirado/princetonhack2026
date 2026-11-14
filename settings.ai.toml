@@ -16,4 +16,6 @@ llm_max_output_tokens = 1024
 
 costar_enabled = false
 costar_data_dir = "/app/costardata"
+matterport_enabled = false
+matterport_timeout_seconds = 15
 # costar_snapshot_date is intentionally unset: a file date is not an availability date.

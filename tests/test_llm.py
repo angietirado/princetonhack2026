@@ -534,11 +534,18 @@ def test_recurring_is_only_a_candidate_with_evidence():
     assert "No confirmed subscriptions" in result["limitations"]
 
 
-@pytest.mark.parametrize("status,category", [
-    (401, "authentication_rejected"), (403, "authorization_rejected"),
-    (400, "invalid_request"), (429, "rate_limited"), (503, "provider_error"),
-    ("private-response-value", "unknown"), (True, "unknown"),
-])
+@pytest.mark.parametrize(
+    "status,category",
+    [
+        (401, "authentication_rejected"),
+        (403, "authorization_rejected"),
+        (400, "invalid_request"),
+        (429, "rate_limited"),
+        (503, "provider_error"),
+        ("private-response-value", "unknown"),
+        (True, "unknown"),
+    ],
+)
 def test_smoke_diagnostic_uses_status_without_error_text(status, category):
     from scripts.smoke_ai import DiagnosticModel
 
@@ -565,3 +572,197 @@ def test_smoke_diagnostic_never_makes_more_than_two_requests():
         asyncio.run(diagnostic.ainvoke([], config={"callbacks": []}))
     assert len(provider.messages) == 2
     assert diagnostic.failure["category"] == "local_call_limit"
+
+
+@pytest.mark.parametrize("provider", ["gemini", "nemotron"])
+def test_nested_inspection_schema_serializes_for_real_provider_without_network(
+    provider, monkeypatch
+):
+    from langchain_core.messages import HumanMessage
+
+    importlib.import_module(
+        "langchain_google_genai" if provider == "gemini" else "langchain_nvidia_ai_endpoints"
+    )
+
+    class Catalog:
+        def search(self, *_args, **_kwargs):
+            pytest.fail("Schema binding must not read catalog data")
+
+    class Inspector:
+        async def inspect_floor_plan(self, *_args, **_kwargs):
+            pytest.fail("Schema binding must not inspect a model")
+
+    monkeypatch.setattr(socket.socket, "connect", lambda *_: pytest.fail("unexpected network"))
+    monkeypatch.setattr(socket, "create_connection", lambda *_: pytest.fail("unexpected network"))
+    model = create_provider_model(config(llm_provider=provider))
+    binding = model.bind_tools(_read_tools(SpendingTools(snapshot()), Catalog(), Inspector()))
+    # bind_tools uses an intermediate schema. Also exercise the final request
+    # conversion, which differs between Google GenAI and NVIDIA integrations.
+    messages = [HumanMessage(content="Inspect a selected synthetic floor plan")]
+    if provider == "gemini":
+        request = model._prepare_request(messages, **binding.kwargs)
+        declarations = [
+            declaration.model_dump(mode="json", exclude_none=True)
+            for tool in request["config"].tools
+            for declaration in tool.function_declarations
+        ]
+        function = next(item for item in declarations if item["name"] == "inspect_floor_plan")
+    else:
+        _, payload, _ = model._prepare_inputs_and_payload(messages, **binding.kwargs)
+        function = next(
+            item["function"]
+            for item in payload["tools"]
+            if item["function"]["name"] == "inspect_floor_plan"
+        )
+    parameters = function["parameters"]
+    assert set(parameters["required"]) == {"criteria", "property_id", "floor_plan_id"}
+    assert set(parameters["properties"]) == {
+        "criteria",
+        "property_id",
+        "floor_plan_id",
+        "include_dimensions",
+    }
+    criteria = parameters["properties"]["criteria"]
+    assert criteria["type"].lower() == "object"
+    assert criteria["properties"]["state"]["enum"] == ["TX", "CA"]
+    assert "max_monthly_rent_usd" in criteria["properties"]
+    assert "model_id" not in criteria["properties"] and "endpoint" not in criteria["properties"]
+    serialized = json.dumps(parameters)
+    assert '"$ref"' not in serialized and '"$defs"' not in serialized
+    assert "synthetic-gemini-token" not in serialized and "synthetic-nvidia-token" not in serialized
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"property_id": True},
+        {"property_id": "20"},
+        {"floor_plan_id": 0},
+        {"include_dimensions": "true"},
+        {"model_id": "arbitrary"},
+        {"criteria": {"model_id": "arbitrary"}},
+        {"criteria": {"limit": 21}},
+        {"criteria": {"endpoint": "https://unrelated.invalid"}},
+    ],
+)
+def test_inspection_nested_arguments_rejected_before_any_inspector_read(override):
+    class Catalog:
+        def search(self, *_args, **_kwargs):
+            pytest.fail("Invalid tool input must not read the catalog")
+
+    class Inspector:
+        async def inspect_floor_plan(self, *_args, **_kwargs):
+            pytest.fail("Invalid tool input must not invoke the inspector")
+
+    arguments = {"criteria": {}, "property_id": 20, "floor_plan_id": 30, **override}
+    response = run(
+        ScriptedModel(AIMessage(content="", tool_calls=[call("inspect_floor_plan", arguments)])),
+        catalog=Catalog(),
+        matterport_client=Inspector(),
+    )
+    assert response.status == "unavailable" and response.tool_calls == 0
+
+
+def test_inspection_passes_validated_nested_criteria_and_explicit_dimensions_flag():
+    from spending_api.costar import CostarSearchCriteria
+
+    class Catalog:
+        def search(self, *_args, **_kwargs):
+            pytest.fail("The wrapper delegates catalog validation to the inspector")
+
+    class Inspector:
+        async def inspect_floor_plan(
+            self, criteria, property_id, floor_plan_id, *, include_dimensions
+        ):
+            assert isinstance(criteria, CostarSearchCriteria)
+            assert criteria.state == "CA" and criteria.limit == 2
+            assert (property_id, floor_plan_id) == (20, 30)
+            assert include_dimensions is False
+            return {
+                "status": "ok",
+                "source_kind": "synthetic_inspector",
+                "geometry_clearance_verified": False,
+                "rooms": [],
+            }
+
+    arguments = {
+        "criteria": {"state": "CA", "limit": 2},
+        "property_id": 20,
+        "floor_plan_id": 30,
+        "include_dimensions": False,
+    }
+    response = run(
+        ScriptedModel(
+            AIMessage(content="", tool_calls=[call("inspect_floor_plan", arguments)]),
+            AIMessage(content="No dimensions requested; furniture clearance is unknown."),
+        ),
+        catalog=Catalog(),
+        matterport_client=Inspector(),
+    )
+    assert response.status == "answered" and response.tool_calls == 1
+    assert response.evidence[0]["arguments"] == arguments
+    assert response.evidence[0]["result"]["geometry_clearance_verified"] is False
+
+
+def test_inspection_tool_not_exposed_without_both_catalog_and_inspector():
+    def names(tools):
+        return {tool.name for tool in tools}
+
+    assert "inspect_floor_plan" not in names(_read_tools(SpendingTools(snapshot()), None, object()))
+    assert "inspect_floor_plan" not in names(_read_tools(SpendingTools(snapshot()), object(), None))
+
+
+@pytest.mark.parametrize(
+    "room_details_truncated,reference_count", [(True, 3), (True, 1), (False, 3), (False, 1)]
+)
+def test_inspection_coverage_limitations_reach_agent_caveats(
+    room_details_truncated, reference_count
+):
+    class Catalog:
+        def search(self, *_args, **_kwargs):
+            pytest.fail("This wrapper delegates catalog selection to the inspector")
+
+    evidence = {
+        "status": "ok",
+        "source_kind": "synthetic_inspector",
+        "room_count": 25 if room_details_truncated else 5,
+        "rooms_returned": 20 if room_details_truncated else 5,
+        "rooms_truncated": room_details_truncated,
+        "verified_reference_count": reference_count,
+        "models_inspected": 1,
+        "all_referenced_models_inspected": reference_count == 1,
+        "geometry_clearance_verified": False,
+    }
+
+    class Inspector:
+        async def inspect_floor_plan(self, *_args, **_kwargs):
+            return copy.deepcopy(evidence)
+
+    response = run(
+        ScriptedModel(
+            AIMessage(
+                content="",
+                tool_calls=[
+                    call(
+                        "inspect_floor_plan",
+                        {
+                            "criteria": {},
+                            "property_id": 20,
+                            "floor_plan_id": 30,
+                        },
+                    )
+                ],
+            ),
+            AIMessage(content="The selected model has room metadata; clearance remains unknown."),
+        ),
+        catalog=Catalog(),
+        matterport_client=Inspector(),
+    )
+    assert response.status == "answered"
+    assert response.evidence[0]["result"] == evidence
+    assert any("bounded subset" in caveat for caveat in response.caveats) is room_details_truncated
+    fraction = (
+        "inspect_floor_plan inspected 1 of 3 catalog model references; "
+        "other models remain uninspected."
+    )
+    assert (fraction in response.caveats) is (reference_count == 3)

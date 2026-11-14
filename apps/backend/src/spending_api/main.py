@@ -17,7 +17,8 @@ from spending_api.agent_tools import SpendingTools
 from spending_api.config import Settings, load_settings
 from spending_api.costar import CostarCatalog, CostarSearchCriteria
 from spending_api.dashboard import build_dashboard
-from spending_api.llm import AgentAnswer, answer_spending
+from spending_api.llm import AgentAnswer, FloorPlanInspection, answer_spending
+from spending_api.matterport import MatterportClient
 from spending_api.models import (
     Account,
     DashboardData,
@@ -52,6 +53,13 @@ def _unique_json_object(pairs):
     return result
 
 
+def _inspection_schema():
+    schema = FloorPlanInspection.model_json_schema()
+    schema.pop("$defs", None)
+    schema["properties"]["criteria"] = CostarSearchCriteria.model_json_schema()
+    return schema
+
+
 async def _bounded_json(request: Request) -> dict:
     if request.query_params:
         raise HTTPException(
@@ -73,7 +81,9 @@ async def _bounded_json(request: Request) -> dict:
         raise HTTPException(422, "Invalid JSON request") from None
 
 
-def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, agent_model=None, matterport_transport=None
+) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="Spending Companion API", version="0.1.0")
     app.add_middleware(
@@ -86,6 +96,7 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
     # A single request per worker prevents an unbounded queue of paid model work.
     agent_lock = asyncio.Lock()
     catalog_lock = asyncio.Lock()
+    inspection_lock = asyncio.Lock()
     catalog = (
         CostarCatalog(
             settings.costar_data_dir,
@@ -94,6 +105,18 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
             else None,
         )
         if settings.costar_enabled
+        else None
+    )
+    matterport_client = (
+        MatterportClient(
+            catalog,
+            settings.matterport_api_key,
+            settings.matterport_api_token,
+            timeout_seconds=settings.matterport_timeout_seconds,
+            include_legacy_dimensions=True,
+            transport=matterport_transport,
+        )
+        if settings.matterport_enabled
         else None
     )
 
@@ -140,6 +163,7 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
             else settings.nemotron_model,
             "read_only": True,
             "costar_enabled": settings.costar_enabled,
+            "matterport_enabled": settings.matterport_enabled,
             "max_model_turns": settings.llm_max_model_turns,
             "max_tool_calls": settings.llm_max_tool_calls,
             "timeout_seconds": settings.llm_timeout_seconds,
@@ -171,7 +195,12 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
                 async with asyncio.timeout(settings.llm_timeout_seconds):
                     tools = await scoped_tools(None)
                     return await answer_spending(
-                        tools, question.question, settings, model=agent_model, catalog=catalog
+                        tools,
+                        question.question,
+                        settings,
+                        model=agent_model,
+                        catalog=catalog,
+                        matterport_client=matterport_client,
                     )
             except TimeoutError:
                 raise HTTPException(504, "AI request deadline exceeded") from None
@@ -205,6 +234,43 @@ def create_app(settings: Settings | None = None, *, agent_model=None) -> FastAPI
         async with catalog_lock:
             result = await run_in_threadpool(catalog.search, criteria)
         if result["status"] != "ok":
+            response.status_code = 503
+        return result
+
+    @app.post(
+        "/api/v1/costar/inspect",
+        dependencies=[Depends(authorize)],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": _inspection_schema()}},
+            }
+        },
+    )
+    async def inspect_floor_plan(request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        if matterport_client is None:
+            raise HTTPException(
+                503, "Matterport inspection is disabled in the public settings file"
+            )
+        try:
+            query = FloorPlanInspection.model_validate(await _bounded_json(request))
+        except ValidationError:
+            raise HTTPException(
+                422, "Provide catalog criteria, property ID, and floor-plan ID"
+            ) from None
+        if inspection_lock.locked():
+            raise HTTPException(429, "A model inspection is running; retry shortly")
+        async with inspection_lock:
+            result = await matterport_client.inspect_floor_plan(
+                query.criteria,
+                query.property_id,
+                query.floor_plan_id,
+                include_dimensions=query.include_dimensions,
+            )
+        if result["status"] == "selection_rejected":
+            response.status_code = 422
+        elif result["status"] != "ok":
             response.status_code = 503
         return result
 

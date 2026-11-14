@@ -37,6 +37,8 @@ class PublicSettings(BaseModel):
     costar_enabled: bool = False
     costar_data_dir: Path = Path("costardata")
     costar_snapshot_date: date | None = None
+    matterport_enabled: bool = False
+    matterport_timeout_seconds: float = Field(default=15, ge=1, le=30)
 
 
 class Settings(PublicSettings, BaseSettings):
@@ -57,6 +59,18 @@ class Settings(PublicSettings, BaseSettings):
 
     @model_validator(mode="after")
     def require_live_credentials(self):
+        if self.matterport_enabled and not all(
+            [
+                self.costar_enabled,
+                self.matterport_api_key.get_secret_value(),
+                self.matterport_api_token.get_secret_value(),
+                self.app_api_token.get_secret_value(),
+            ]
+        ):
+            raise ValueError(
+                "Enabled Matterport requires the CoStar catalog, APP_API_TOKEN, "
+                "MATTERPORT_API_KEY and MATTERPORT_API_TOKEN"
+            )
         if self.costar_enabled and not self.app_api_token.get_secret_value():
             raise ValueError("Enabled CoStar catalog requires APP_API_TOKEN in the environment")
         if self.llm_enabled:

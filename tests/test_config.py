@@ -103,3 +103,23 @@ def test_public_ai_settings_reject_credentials(tmp_path, name):
 def test_ai_settings_bound_work(field, value):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, data_source="fixture", llm_enabled=False, **{field: value})
+
+
+@pytest.mark.parametrize(
+    "missing", ["costar_enabled", "matterport_api_key", "matterport_api_token", "app_api_token"]
+)
+def test_matterport_requires_catalog_and_backend_credentials(missing):
+    options = dict(
+        _env_file=None,
+        data_source="fixture",
+        llm_enabled=False,
+        costar_enabled=True,
+        matterport_enabled=True,
+        matterport_api_key="fake-id",
+        matterport_api_token="never-echo-secret",
+        app_api_token="fake-app-token",
+    )
+    options[missing] = False if missing == "costar_enabled" else ""
+    with pytest.raises(ValidationError) as error:
+        Settings(**options)
+    assert "never-echo-secret" not in str(error.value)

@@ -114,7 +114,17 @@ docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -
 
 Try `POST /api/v1/costar/search` in the API docs with `{"state":"TX","bedrooms":1,"max_monthly_rent_usd":1800,"limit":5}`. This deterministic route works even with AI disabled. When both integrations are enabled, the question API also offers the model a `costar_search` tool.
 
-Results include recorded rent ranges, source evidence, coverage limits, and associated Matterport IDs. An asking-rent minimum below the filter does not mean the whole range is affordable; check `price_range_within_budget`. Availability is historical, and a model reference does not mean an interior was inspected. No tour booking, live Matterport geometry, or Vexcel imagery request is implemented.
+Results include recorded rent ranges, source evidence, coverage limits, and associated Matterport IDs. An asking-rent minimum below the filter does not mean the whole range is affordable; check `price_range_within_budget`. Availability is historical, and a model reference does not mean an interior was inspected.
+
+For a live Matterport evidence read, also set `matterport_enabled = true`, fill the backend API key/token pair, and recreate the backend. `POST /api/v1/costar/inspect` accepts the same search `criteria` plus a returned `property_id` and `floor_plan_id`. It resolves an unambiguous catalog model itself; callers cannot supply a model ID, URL, or GraphQL. The AI gains an `inspect_floor_plan` tool when this is enabled. Rooms and measurements retain their returned units; null dimensions remain unknown. Area alone does not prove furniture fit. No booking, room-boundary/obstacle inspection, or Vexcel imagery extraction is implemented.
+
+You can also ask the running API from the backend terminal:
+
+```sh
+docker compose --env-file .env -p princeton-langchain-20261114 exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas under 1800 USD monthly, then inspect one catalog-linked floor plan."
+```
+
+The terminal sends one authenticated request to the same local API and prints the answer, evidence, and limitations. It exits unsuccessfully for incomplete answers. The full question is required on each call; no conversation memory is stored.
 
 ## What runs today
 
