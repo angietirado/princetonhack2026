@@ -20,6 +20,7 @@ from spending_api.comparison import ComparisonRequest, compare_bound_spending, c
 from spending_api.config import Settings
 from spending_api.costar import CostarSearchCriteria
 from spending_api.models import DateRange
+from spending_api.provider_lifecycle import close_owned_provider
 
 if TYPE_CHECKING:
     from spending_api.costar import CostarCatalog
@@ -603,6 +604,7 @@ async def answer_spending(
     if not settings.llm_enabled:
         text = "The AI assistant is disabled. Structured data views remain available."
     else:
+        owned_model = None
         try:
             from langsmith import tracing_context
 
@@ -610,8 +612,15 @@ async def answer_spending(
             # cannot export snapshot data; graphs have no persistence or memory store.
             with tracing_context(enabled=False):
                 async with asyncio.timeout(settings.llm_timeout_seconds):
+                    if model is None:
+                        # Retain the factory root before graph construction can
+                        # fail. Injected models and all bound views are borrowed.
+                        owned_model = create_provider_model(settings)
+                        request_model = owned_model
+                    else:
+                        request_model = model
                     advisor = _build_advisor(
-                        model if model is not None else create_provider_model(settings),
+                        request_model,
                         bound,
                         catalog,
                         budget,
@@ -642,6 +651,11 @@ async def answer_spending(
             # Provider diagnostics, raw validation errors and tool errors may contain
             # keys or customer data. Only the structured ledger is safe to return.
             pass
+        finally:
+            if owned_model is not None:
+                # The primary timeout scope has unwound; cleanup has its own
+                # short cooperative budget on this same task and event loop.
+                await close_owned_provider(owned_model)
     if any(row["result"].get("truncated") for row in budget.evidence):
         caveats.append("Transaction evidence is a limited subset of the observed matching records.")
     return AgentAnswer(

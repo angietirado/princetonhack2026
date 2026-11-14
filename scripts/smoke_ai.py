@@ -14,6 +14,7 @@ from spending_api.agent_tools import SpendingTools
 from spending_api.config import PublicSettings, Settings
 from spending_api.llm import answer_spending, create_provider_model
 from spending_api.models import Account, DateRange, Snapshot, Transaction
+from spending_api.provider_lifecycle import close_owned_provider
 
 
 class DiagnosticModel:
@@ -152,8 +153,12 @@ async def run(args):
         )
         started = time.monotonic()
         print(json.dumps({"provider": provider, "status": "starting"}), flush=True)
+        owned_model = None
         try:
-            model = DiagnosticModel(create_provider_model(selected))
+            # The request borrows its diagnostic wrapper; this scope owns the
+            # exact provider root, including when wrapper construction fails.
+            owned_model = create_provider_model(selected)
+            model = DiagnosticModel(owned_model)
             result = await answer_spending(
                 tools,
                 "Delegate to spending with task. The specialist must use summarize_spending "
@@ -201,6 +206,9 @@ async def run(args):
                 ),
                 flush=True,
             )
+        finally:
+            if owned_model is not None:
+                await close_owned_provider(owned_model)
     return 0 if all(successes) else 1
 
 
