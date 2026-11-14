@@ -23,7 +23,8 @@ from langsmith import tracing_context
 from pydantic import Field, StrictInt, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from spending_api.lab_engine import canonical, fingerprint, recommend
+from spending_api.lab_engine import canonical, fingerprint
+from spending_api.lab_financial import REVIEW_NOTICE, financial_recommend
 from spending_api.lab_models import Constraints, InputModel
 from spending_api.lab_store import LabConflict, LabStore, now_iso
 
@@ -85,6 +86,8 @@ class ChatState(TypedDict, total=False):
     mode: Literal["offline", "model", "fallback"]
     status: Literal["ok", "clarification", "no_feasible_plan"]
     plans: list[dict]
+    wallet_summary: dict | None
+    wallet_review: bool
     reply: str
 
 
@@ -287,10 +290,17 @@ def build_chat_graph(gate: InterpreterGate):
     def calculate(state: ChatState):
         if state["status"] == "clarification":
             return {"plans": []}
-        result = recommend(state["scenario"], state["proposal_constraints"])
-        return {"plans": result["plans"], "status": result["status"]}
+        result = financial_recommend(state["scenario"], state["proposal_constraints"])
+        review = result["status"] == "needs_review"
+        return {
+            "plans": result["plans"], "status": "clarification" if review else result["status"],
+            "wallet_summary": result.get("wallet_summary"), "wallet_review": review,
+            "proposal_constraints": state["constraints"] if review else state["proposal_constraints"],
+        }
 
     def explain(state: ChatState):
+        if state.get("wallet_review"):
+            return {"reply": REVIEW_NOTICE + " Your saved shopping choices are unchanged."}
         if state["status"] == "clarification":
             return {"reply": CLARIFICATION}
         constraints = state["proposal_constraints"]
@@ -300,6 +310,9 @@ def build_chat_graph(gate: InterpreterGate):
             f"{constraints['time_budget_minutes']:g} minutes, {mode}, and up to "
             f"{constraints['max_stores']} store(s)"
         )
+        wallet = state.get("wallet_summary")
+        if wallet is not None:
+            scope += f", with ${wallet['spendable_now_cents'] / 100:.2f} available for shopping now"
         if not state["plans"]:
             return {"reply": (
                 scope + ", no complete-basket plan fits. I kept your limits unchanged. "
@@ -514,6 +527,8 @@ class ChatService:
                 "constraints": result["proposal_constraints"], "plans": result["plans"],
                 "status": result["status"], "notice": NOTICE,
             }
+            if result.get("wallet_summary") is not None:
+                response["wallet_summary"] = result["wallet_summary"]
             return await run_in_threadpool(self._complete, session["id"], request, claim, response)
         finally:
             await run_in_threadpool(self._release, session["id"], claim["lease"])
@@ -543,8 +558,3 @@ def register_chat_routes(app, store: LabStore, *, interpreter=None, timeout_seco
     ):
         session = await run_in_threadpool(authenticated, session_id, credentials)
         return await service.turn(session, body)
-
-
-
-
-

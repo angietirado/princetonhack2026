@@ -15,7 +15,11 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from spending_api.lab_chat import register_chat_routes
-from spending_api.lab_engine import evaluate, recommend
+from spending_api.lab_financial import (
+    attach_wallet, create_financial_catalog, financial_evaluate, financial_recommend,
+    register_financial_routes,
+)
+from spending_api.lab_investigation_api import register_investigation_routes
 from spending_api.lab_models import (
     Catalog,
     ChoiceRequest,
@@ -50,12 +54,15 @@ def create_app(
     admin_token: str | None = None,
     chat_interpreter=None,
     chat_timeout_seconds: float = 12.0,
+    investigation_interpreter=None,
+    investigation_timeout_seconds: float = 12.0,
 ) -> FastAPI:
     """No dotenv loading or live provider calls, including at startup."""
     source = Path(scenarios_path or os.environ.get("LAB_SCENARIOS_PATH", "data/scenarios.json"))
     catalog = Catalog.model_validate_json(source.read_text(encoding="utf-8-sig"))
     scenarios = {item.id: item.model_dump(mode="json") for item in catalog.scenarios}
     store = LabStore(db_path or os.environ.get("LAB_DB_PATH", ".data/lab.sqlite3"))
+    wallet_profiles = create_financial_catalog()
     admin_key = os.environ.get("LAB_ADMIN_TOKEN", "") if admin_token is None else admin_token
     @asynccontextmanager
     async def lifespan(application):
@@ -63,6 +70,7 @@ def create_app(
             yield
         finally:
             application.state.lab_chat.gate.close()
+            application.state.lab_investigation.close()
 
     app = FastAPI(
         lifespan=lifespan,
@@ -76,6 +84,7 @@ def create_app(
     app.state.lab_store = store
     app.state.lab_scenarios = scenarios
     app.state.lab_admin_protected = bool(admin_key)
+    app.state.lab_wallet_profiles = wallet_profiles
 
     @app.middleware("http")
     async def request_limits(request: Request, call_next):
@@ -147,7 +156,7 @@ def create_app(
             body.constraints.model_dump(mode="json") if body.constraints else session["constraints"]
         )
         try:
-            return evaluate(session["scenario"], body.assignments, constraints)
+            return financial_evaluate(session["scenario"], body.assignments, constraints)
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 
@@ -164,7 +173,8 @@ def create_app(
         scenario = scenarios.get(body.scenario_id)
         if scenario is None:
             raise LabNotFound("Scenario not found")
-        return store.create_session(body.model_dump(mode="json"), scenario)
+        scenario = attach_wallet(scenario, body.wallet_profile_id, wallet_profiles)
+        return store.create_session(body.model_dump(mode="json", exclude_none=True), scenario)
 
     @app.get("/api/v1/sessions/{session_id}")
     def get_session(session_id: UUID, credentials: Credentials):
@@ -190,7 +200,7 @@ def create_app(
         constraints = (
             body.constraints.model_dump(mode="json") if body.constraints else session["constraints"]
         )
-        return recommend(session["scenario"], constraints)
+        return financial_recommend(session["scenario"], constraints)
 
     @app.get("/api/v1/analytics/summary", dependencies=[Depends(require_admin)])
     def analytics_summary(
@@ -226,7 +236,9 @@ def create_app(
     register_chat_routes(
         app, store, interpreter=chat_interpreter, timeout_seconds=chat_timeout_seconds
     )
+    register_financial_routes(app, store, wallet_profiles)
+    register_investigation_routes(
+        app, store, interpreter=investigation_interpreter,
+        timeout_seconds=investigation_timeout_seconds,
+    )
     return app
-
-
-

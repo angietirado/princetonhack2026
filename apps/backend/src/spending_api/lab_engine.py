@@ -88,7 +88,9 @@ def evaluate(scenario: dict, assignments: dict[str, str], constraints: dict) -> 
     }
 
 
-def recommend(scenario: dict, constraints: dict) -> dict:
+def recommend(scenario: dict, constraints: dict, *, cost_cap_cents: int | None = None) -> dict:
+    if cost_cap_cents is not None and (type(cost_cap_cents) is not int or cost_cap_cents < 0):
+        raise ValueError("The additional cost cap must be a nonnegative integer number of cents")
     scenario = Scenario.model_validate(scenario).model_dump(mode="json")
     constraints = Constraints.model_validate(constraints).model_dump(mode="json")
     stores = sorted(scenario["stores"], key=lambda store: store["id"])
@@ -103,7 +105,10 @@ def recommend(scenario: dict, constraints: dict) -> dict:
             if key not in candidates:
                 candidates[key] = evaluate(scenario, assignments, constraints)
 
-    feasible = [item for item in candidates.values() if item["feasible"]]
+    feasible = [
+        item for item in candidates.values() if item["feasible"]
+        and (cost_cap_cents is None or item["total_cost_cents"] <= cost_cap_cents)
+    ]
     feasible.sort(key=lambda item: (
         item["total_cost_cents"], item["total_minutes"], canonical(item["assignments"])
     ))
@@ -138,4 +143,3 @@ def recommend(scenario: dict, constraints: dict) -> dict:
             "No budget or time constraint has been relaxed."
         ),
     }
-

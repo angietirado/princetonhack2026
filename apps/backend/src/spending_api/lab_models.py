@@ -97,6 +97,7 @@ class Catalog(InputModel):
 
 
 class SessionRequest(InputModel):
+    wallet_profile_id: Literal["steady", "tight", "buffer"] | None = None
     scenario_id: Identifier
     constraints: Constraints
     is_demo: StrictBool = False
@@ -126,4 +127,3 @@ class RecommendationRequest(InputModel):
 
 
 DataMode = Literal["participants", "demo", "all"]
-

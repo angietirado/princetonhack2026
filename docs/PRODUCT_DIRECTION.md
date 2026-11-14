@@ -29,16 +29,16 @@ Experimental decisions branch a local ledger. They must not mutate another parti
 Offline fixtures remain labeled fictional; a fixture is not a live Nessie capture.
 
 ### Investigate the decision
-A bounded deep agent should read the financial context, identify binding constraints, run counterfactuals, ask one consequential question, and revise its plan.
+The bounded investigation module reads financial context, identifies binding constraints and evaluates counterfactuals. Its optional LangChain agent selects verified evidence and a consequential question; interface integration is underway.
 Example: 'Would you accept another stop, or can your time limit move?' The answer should change which alternatives it investigates.
 The guide produces an inspectable decision card: proposed plan, evidence, assumptions, and unresolved tradeoffs.
-Use deterministic tools for calculations and one controlled investigation workflow. Deep Agents planning and delegation should serve the task.
+Use deterministic tools for calculations and one controlled investigation workflow. The current bounded task uses LangChain create_agent; adding Deep Agents would need a concrete benefit from its planning or delegation features.
 An aggregate research assistant may investigate why cheaper options were rejected and propose follow-up experiments; it must distinguish a hypothesis from causal evidence.
 
 ### Make location meaningful
-The initial seed places identical fictional stores at the same offsets around each home. This is sufficient for testing shopping interactions but is not a meaningful location comparison.
-Create a fixed shared store world, then move the same household between recorded CoStar rental options. Keep the basket, stores, assumptions, and household needs fixed.
-Record rent ranges and unknown fees separately; sale values do not establish monthly housing costs.
+Implemented in cf9ae50: three recorded rental homes now share one fixed fictional store world. The earlier home-relative layout remains only in historical session snapshots.
+Next, compare the same household across the recorded CoStar rental options while keeping the basket, stores, assumptions and household needs fixed. World versioning prevents mixing incompatible store layouts.
+Recorded monthly rents and unknown fees are already separate. The homes differ in size and amenities; raw rent differences are not like-for-like valuations or income estimates.
 Matterport and Vexcel have no convincing role in the current product and are not planned integrations. Earlier spatial-extension ideas are research possibilities only, not roadmap commitments.
 An interior scan alone cannot prove entrance accessibility, appliance operation, storage capacity, or street-to-door travel time.
 Vexcel may add visible spatial context; imagery alone does not establish safe pedestrian routes.
