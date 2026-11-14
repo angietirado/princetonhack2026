@@ -1,12 +1,28 @@
 # Integration setup
 
-Use `settings.example.toml` for non-secret options and `.env.example` for credentials. Start native Python commands from the repository root so both files and relative fixture paths resolve consistently. Keep keys out of the React app and Git.
+Run Docker Compose commands from the repository root. The credential-free quickstart uses `settings.example.toml` and `.env.example`; the local catalog recipe uses `settings.catalog.toml`, and the opt-in AI recipe uses `settings.ai.toml`. Keep real credentials in the ignored `.env`, never in a public template, browser code, or Git. Host Python is not required.
 
-Keep credentials in the root `.env` and public options in `settings.toml`. The backend reads public options from TOML; those values take priority over obsolete public options left in `.env`. Secrets are loaded from process environment or `.env`, with process environment taking precedence. The public settings file rejects credential fields. Docker mounts it read-only and passes only the relevant credentials to each Python service.
+Keep credentials in the root `.env` and public options in the selected TOML file. The backend reads public options from TOML; those values take priority over obsolete public options left in `.env`. Secrets are loaded from process environment or `.env`, with process environment taking precedence. The public settings file rejects credential fields. Docker mounts it read-only and passes only the relevant credentials to each Python service.
 
 `.env.example` sets `APP_SETTINGS_FILE=./settings.example.toml` for offline checks. Omit that selector from your private `.env` to use `settings.toml`. Native commands also accept `APP_SETTINGS_FILE` in the process environment; they default to `settings.toml`.
 
-After editing settings, run `docker compose --env-file .env up --build --detach --wait` to recreate affected services. Validate shared configuration with `docker compose --env-file .env.example config --quiet`; this uses the public template instead of your private `.env`. Gemini and NVIDIA credentials are passed only to the backend when the optional AI assistant is enabled.
+Validate shared configuration with `docker compose --env-file .env.example config --quiet`; this uses the public template instead of your private `.env`. Compose passes configured Gemini and NVIDIA credentials only to the backend; the AI enable flag controls whether the assistant can use them.
+
+## Reloading configuration
+
+The backend loads TOML once when it starts. Editing a bind-mounted TOML file does not by itself change Compose's service definition, so `up --build` may leave the old process running. Restart the backend for TOML-content-only edits. Recreate it after changing credentials, the `APP_SETTINGS_FILE` selector, or Compose settings; restarting cannot replace a container's environment variables.
+
+For the named catalog project, retain the project name and both Compose files:
+
+```sh
+# Existing TOML file contents changed; keep the same mounted file and credentials.
+docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml restart backend
+
+# Credentials, selected file, or Compose configuration changed.
+docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml up --build --detach --wait --force-recreate --no-deps backend
+```
+
+These commands leave the data initializer and generated-data volume alone. For the AI project without a catalog, omit both `-f` flags. For the original default-project workflow, also omit `-p princeton-langchain-20261114`. Use `up --build --detach --wait` for the initial full-stack startup, before using targeted backend commands.
 
 ## Nessie v2
 
@@ -16,15 +32,17 @@ The current MVP pins `cust_01m7cen22b7daz0s8gkcp3mt96`, with two accounts, from 
 
 Preview a historical simulation request:
 
-```powershell
-.\scripts\uv.ps1 run --package spending-data-generator generate-data --target nessie --seed 42 --days 90 --transactions 300
+```sh
+docker compose --env-file .env --profile tools run --build --rm --no-deps generator --target nessie --seed 42 --days 90 --transactions 300
 ```
 
 Create the synthetic dataset only when ready:
 
-```powershell
-.\scripts\uv.ps1 run --package spending-data-generator generate-data --target nessie --seed 42 --days 90 --transactions 300 --apply
+```sh
+docker compose --env-file .env --profile tools run --build --rm --no-deps generator --target nessie --seed 42 --days 90 --transactions 300 --apply
 ```
+
+Add your chosen `-p` and `-f` flags when using a named or catalog project. The generator writes its run receipt to that project's shared volume, not the host `.data` directory.
 
 For a deliberate replacement dataset, this writes to the Nessie sandbox and saves the response in `.data/nessie-run.json`. Wait for completion, then put the chosen returned ID in `nessie_customer_id` and set `data_source = "nessie"` in `settings.toml`. `NESSIE_API_KEY` and `APP_API_TOKEN` remain in `.env`; live mode requires both credentials and a pinned customer. Restart the backend and call protected routes with the app bearer token. The existing token does not need regeneration.
 
@@ -74,6 +92,8 @@ The default models are `gemini-3.8-flash` and `nvidia/nemotron-3.5-lightning-30b
 
 From the repository root, start the isolated Compose project:
 
+If the README's default-project quickstart is still using ports 5173/8765, stop that project first with `docker compose --env-file .env.example down`. This preserves its named data volume; do not add `--volumes`. Stop only the project you previously started. Then choose the named project below and retain its `-p` flag for later commands.
+
 ```sh
 docker compose --env-file .env -p princeton-langchain-20261114 up --build --detach --wait
 ```
@@ -98,7 +118,24 @@ Use `--provider nemotron` for NVIDIA. This command uses the running container's 
 
 The supplied local CoStar catalog requires no API key. Its Matterport model references are metadata, not evidence that an interior was inspected, and recorded availability is not live availability.
 
-Set `costar_enabled = true` and `costar_data_dir = "/app/costardata"` in the selected TOML file, retain `APP_API_TOKEN`, and use `-f compose.yaml -f compose.costar.yaml` with Docker Compose. The override mounts `./costardata` read-only and refuses to create a missing host directory. The dataset is excluded from Git and Docker builds. Without the optional mount, the application reports unavailable catalog evidence instead of an empty successful search.
+For a catalog-only teammate setup, place the supplied kit at `./costardata` with `data/apartment-listing.jsonl`, `data/commercial-property.jsonl`, and `commercial-properties.csv`. In the ignored `.env`, select the public catalog template and set an app token:
+
+```dotenv
+APP_SETTINGS_FILE=./settings.catalog.toml
+APP_API_TOKEN=your-own-app-token
+```
+
+Reuse an existing `.env`; copy `.env.example` only when that file does not already exist. `settings.catalog.toml` selects fixture spending data, `llm_enabled = false`, `costar_enabled = true`, `matterport_enabled = false`, and `costar_data_dir = "/app/costardata"`. Only the app token is required. It makes no bank, model, or spatial API requests. In contrast, `settings.ai.toml` enables AI and requires the selected model provider key even if you intend to use only the catalog form.
+
+After stopping a conflicting default-project quickstart as described above, start the catalog project:
+
+```sh
+docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml up --build --detach --wait
+```
+
+Open `http://127.0.0.1:5173`, unlock with the app token, and select **Ask your books**. The apartment-filter form works while AI is disabled. A running named project that changes settings selectors needs the [targeted backend recreation](#reloading-configuration) rather than a restart alone. Keep the same project and Compose-file flags on subsequent commands.
+
+To add the catalog to another configuration, set `costar_enabled = true` and `costar_data_dir = "/app/costardata"` in that TOML file, retain `APP_API_TOKEN`, and use `-f compose.yaml -f compose.costar.yaml` with Docker Compose. The override mounts `./costardata` read-only and refuses to create a missing host directory. The dataset is excluded from Git and Docker builds. Without the optional mount, the application reports unavailable catalog evidence instead of an empty successful search.
 
 `POST /api/v1/costar/search` accepts bounded state/city, bedroom, monthly rent, minimum area, audience, and model-reference filters. It cannot accept a source path. The service parses a bounded projection on the first search and caches that snapshot until backend restart. The response includes source hashes and distinguishes a declared snapshot date from an unknown date. File modification time is not treated as proof of current availability. Search results and the optional agent tool use the same service.
 

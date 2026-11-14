@@ -1,0 +1,13 @@
+# Local catalog development without AI, Nessie, or live spatial API calls.
+# Select this file with APP_SETTINGS_FILE=./settings.catalog.toml in .env.
+# Only APP_API_TOKEN is required; keep it in .env, never in this public file.
+data_source = "fixture"
+fixture_path = ".data/demo.json"
+cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+photon_enabled = false
+
+llm_enabled = false
+costar_enabled = true
+costar_data_dir = "/app/costardata"
+matterport_enabled = false
+# No snapshot date is declared: file dates do not establish current availability.

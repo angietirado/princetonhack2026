@@ -16,6 +16,8 @@ docker compose --env-file .env.example up --build --detach --wait
 
 Open the app at **http://127.0.0.1:5173** and API documentation at **http://127.0.0.1:8765/docs**. Ports 5173 and 8765 must be free. The first build downloads the required images and dependencies.
 
+These quickstart commands use Compose's default project name. The AI and catalog recipes below use the named project `princeton-langchain-20261114` on the same ports. Choose one project at a time and keep its `-p` and optional `-f` flags consistent for later commands; switching instructions appear below.
+
 This uses the credential-free `.env.example` and does not load your private `.env` file. The dashboard loads the generated fixture through FastAPI and labels it synthetic. For your pinned Nessie customer, start with `docker compose --env-file .env up --build --detach --wait` and enter your existing `APP_API_TOKEN` on the dashboard's unlock screen.
 
 ## How the three components run
@@ -73,7 +75,9 @@ Keep non-secret options in `settings.toml`, including `data_source`, `nessie_cus
 
 For a fresh clone, copy `.env.example` only if `.env` does not exist, fill the credentials, and remove its `APP_SETTINGS_FILE` selector to use `settings.toml`. `docker compose --env-file .env.example ...` intentionally mounts `settings.example.toml` instead, so automated checks stay offline. Read the [integration guide](docs/INTEGRATIONS.md) for the complete setup.
 
-To run with your configured provider settings, use `docker compose --env-file .env up --build --detach --wait`. Compose passes the relevant settings to the backend or generator at runtime. The frontend and offline initializer receive no provider keys. Re-run that command after configuration changes. `.env` is ignored by Git and excluded from Docker image builds; use the credential-free `.env.example` for shared configuration and validation.
+To run with your configured provider settings, use `docker compose --env-file .env up --build --detach --wait`. Compose passes the relevant settings to the backend or generator at runtime. The frontend and offline initializer receive no provider keys. `.env` is ignored by Git and excluded from Docker image builds; use the credential-free `.env.example` for shared configuration and validation.
+
+The backend reads TOML once at startup. After changing only the contents of its selected TOML file, run `docker compose --env-file .env restart backend`. After changing credentials, `APP_SETTINGS_FILE`, or Compose configuration, recreate it with `docker compose --env-file .env up --build --detach --wait --force-recreate --no-deps backend`. A restart alone does not reload container environment variables, and `up --build` alone may leave an unchanged container running. For the named AI/catalog project, retain its `-p` and `-f` flags as shown in the [integration guide](docs/INTEGRATIONS.md#reloading-configuration). These targeted commands do not rerun the data initializer.
 
 The settings file is mounted read-only into the backend and generator. Keep `fixture_path` and `photon_inbox_path` under `.data/` so container data persists in the shared volume. Provider credentials stay out of the frontend and image build context.
 
@@ -92,9 +96,17 @@ docker compose --env-file .env.example exec -T backend python -m spending_api.te
 
 ## LangChain assistant
 
-The backend supports Gemini and NVIDIA Nemotron through LangChain. It exposes only read-only spending tools, with server-bound customer data, bounded model/tool calls, and evidence alongside each answer. AI is disabled in the default offline settings.
+The backend supports Gemini and NVIDIA Nemotron through LangChain. It exposes read-only tools, with server-bound customer data, bounded model/tool calls, and evidence alongside each answer. AI is disabled in the default offline settings.
 
 In your ignored `.env`, set `GEMINI_API_KEY` or `NVIDIA_API_KEY`, retain or create `APP_API_TOKEN`, and set `APP_SETTINGS_FILE=./settings.ai.toml`. Select `llm_provider = "gemini"` or `"nemotron"` in `settings.ai.toml`. This file uses generated fixture data so the first AI run needs no Nessie credential. See [key setup and limitations](docs/INTEGRATIONS.md#ai-agents).
+
+If the earlier default-project quickstart is still running, stop that project before starting this named project:
+
+```sh
+docker compose --env-file .env.example down
+```
+
+This preserves its generated-data volume; do not add `--volumes`. Stop only the project you previously started. The named project has its own fixture volume, and both projects cannot occupy the default host ports simultaneously. Once switched, include `-p princeton-langchain-20261114` in subsequent `exec`, `logs`, `restart`, and `down` commands.
 
 ```sh
 docker compose --env-file .env -p princeton-langchain-20261114 up --build --detach --wait
@@ -108,13 +120,24 @@ The answer's `status` must be `answered` before treating its prose as a complete
 
 ## CoStar catalog search
 
-Place the supplied data kit in the ignored `costardata/` directory and set `costar_enabled = true` in your selected settings file. The sample AI settings already point to `/app/costardata`. The catalog needs `APP_API_TOKEN` but no vendor key. Mount it read-only with the optional Compose file:
+For a local-data-only run, place the supplied data kit in the ignored `costardata/` directory. In your existing ignored `.env` (or a new copy of `.env.example` if no `.env` exists), set:
+
+```dotenv
+APP_SETTINGS_FILE=./settings.catalog.toml
+APP_API_TOKEN=your-own-app-token
+```
+
+The public `settings.catalog.toml` uses generated spending fixtures, enables the local catalog, and disables AI, Matterport, and Photon. No Nessie, Gemini, NVIDIA, or spatial vendor key is required. The data kit must contain `data/apartment-listing.jsonl`, `data/commercial-property.jsonl`, and `commercial-properties.csv`. Use the project-switch instructions above if the default quickstart still occupies the ports, then start with the read-only catalog mount:
 
 ```sh
 docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml up --build --detach --wait
 ```
 
-Try `POST /api/v1/costar/search` in the API docs with `{"state":"TX","bedrooms":1,"max_monthly_rent_usd":1800,"limit":5}`. This deterministic route works even with AI disabled. When both integrations are enabled, the question API also offers the model a `costar_search` tool.
+Open **http://127.0.0.1:5173**, unlock with `APP_API_TOKEN`, and select **Ask your books**. AI being disabled is expected; the apartment-filter form is available after the status check. If changing an already running named project to this settings selector, use the [targeted recreation command](docs/INTEGRATIONS.md#reloading-configuration). Keep both `-f` flags on later catalog-project commands so the data mount remains configured.
+
+To combine catalog search with AI instead, select `settings.ai.toml`, set `costar_enabled = true` there, and supply the chosen model provider key. That template enables AI by default; it is not the catalog-only configuration.
+
+In the API docs, choose **Authorize**, enter `APP_API_TOKEN`, and try `POST /api/v1/costar/search` with `{"state":"TX","bedrooms":1,"max_monthly_rent_usd":1800,"limit":5}`. This deterministic route works even with AI disabled. When both integrations are enabled, the question API also offers the model a `costar_search` tool.
 
 For explicit search inputs, open **Ask your books** and use the apartment-filter form. Choose state, optional city, bedrooms, maximum starting rent, and minimum area, then submit. It calls the local catalog directly, checks that the returned filters match your choices, and shows up to three results without a model call. This form also works with `llm_enabled = false` and `costar_enabled = true`. Starting rent is the low end of a recorded asking range; review the full range and any unknown upper endpoint.
 
@@ -124,10 +147,10 @@ For a live Matterport evidence read, also set `matterport_enabled = true`, fill 
 
 Eligible apartment rows in **Ask your books** also offer **Inspect this floor plan**. This reads the selected plan directly without another model question and displays its measurements separately from the AI answer. The selection retains the search filters and catalog revision; changed or mismatched evidence requires a fresh search. **Stop waiting** discards any later response but does not guarantee cancellation of a provider request already in progress.
 
-You can also ask the running API from the backend terminal:
+When AI and Matterport are enabled, you can also ask the running API from the backend terminal:
 
 ```sh
-docker compose --env-file .env -p princeton-langchain-20261114 exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas under 1800 USD monthly with a verified floor-plan model reference, then inspect one unambiguous plan."
+docker compose --env-file .env -p princeton-langchain-20261114 -f compose.yaml -f compose.costar.yaml exec -T backend python -m spending_api.terminal ask "Find a one-bedroom in Texas under 1800 USD monthly with a verified floor-plan model reference, then inspect one unambiguous plan."
 ```
 
 The terminal sends one authenticated request to the same local API and prints the answer, evidence, and limitations. It exits unsuccessfully for incomplete answers. The full question is required on each call; no conversation memory is stored.
@@ -157,6 +180,8 @@ With the stack running, check the served dashboard and API routes from inside Do
 docker compose --env-file .env.example exec -T backend python scripts/smoke_docker.py --frontend-url http://frontend:8080 --backend-url http://127.0.0.1:8765
 ```
 
+This HTTP smoke command expects the credential-free quickstart fixture stack. It does not authenticate to a configured AI/catalog stack, and `exec --env-file` does not change an existing container's settings. Keep the selected project's `-p` flag on commands targeting a named project.
+
 GitHub Actions runs backend tests, dashboard regression tests, and Docker smoke checks on pushes and pull requests. Docker checks cover HTTP routing, the standalone generator, and data persistence across container recreation. Dependencies are locked in `uv.lock`, root `package-lock.json`, and `apps/frontend/package-lock.json`.
 
 ## Dashboard scope
@@ -180,6 +205,7 @@ data-generator/               Independent fixture and Nessie simulation CLI
 compose.yaml                  Startup for all three components and shared storage
 settings.toml                 Readable runtime options and pinned Nessie customer
 settings.example.toml         Offline options used by credential-free checks
+settings.catalog.toml         Local catalog + fixture options; only the app token is required
 Dockerfile                    Separate backend and generator image targets
 docker/                       Fixture initialization and nginx routing
 docs/                         Design, integration, and optional native setup

@@ -360,6 +360,9 @@ for (const status of ["answered", "limited", "unavailable"]) {
     assert.equal(app.get("ask-evidence").querySelectorAll("details").length, 1);
     assert.match(app.get("ask-evidence").querySelector("pre").textContent, /2026-11-01/);
     assert.equal(app.get("ask-outcome").textContent, { answered: "Answered", limited: "Request limit reached", unavailable: "Answer unavailable" }[status]);
+    assert.match(app.get("ask-state").textContent, { answered: /^Answer ready\./, limited: /^Request limit reached\./, unavailable: /^Answer unavailable\./ }[status]);
+    assert.equal(app.get("ask-state").getAttribute("role"), "status");
+    assert.equal(app.get("ask-state").getAttribute("aria-live"), "polite");
   });
 }
 
@@ -1029,4 +1032,96 @@ test("catalog deadline releases controls and rejects the late result without ret
   finish(response(catalogResponse())); await tick();
   assert.equal(app.get("catalog-evidence").textContent, "");
   assert.equal(app.calls.length, count);
+});
+
+test("AI answer appears directly after its question and before the apartment form", async (t) => {
+  const app = boot(t, askRoute);
+  await tick(); await openAsk(app); typeQuestion(app); app.submit("ask-form"); await tick();
+  assert.equal(app.document.querySelector(".ask-compose").nextElementSibling, app.get("ask-result"));
+  assert.equal(app.get("ask-result").nextElementSibling, app.document.querySelector(".catalog-compose"));
+  assert.equal(app.get("ask-result").classList.contains("hidden"), false);
+});
+
+test("direct search and inspection announce accepted completion with counts and limits", async (t) => {
+  let empty = false;
+  const app = boot(t, (url, options) => {
+    if (url === "/api/v1/costar/search" && empty) return response({ ...catalogResponse(JSON.parse(options.body)), results: [] });
+    return catalogRoute(url, options);
+  });
+  await showCatalog(app);
+  assert.match(app.get("catalog-state-message").textContent, /^Catalog search complete\. 2 recorded matches returned/);
+  assert.equal(app.get("catalog-state-message").getAttribute("aria-live"), "polite");
+  assert.equal(app.get("catalog-form").getAttribute("aria-busy"), "false");
+  app.get("catalog-evidence").querySelector(".inspect-floor-plan").click(); await tick();
+  assert.match(app.get("inspection-state").textContent, /^Inspection complete\./);
+  assert.match(app.get("inspection-state").textContent, /missing measurements.*Furniture fit was not verified/);
+  assert.equal(app.get("inspection-state").getAttribute("role"), "status");
+  assert.equal(app.get("inspection-result").getAttribute("aria-busy"), "false");
+  empty = true; app.submit("catalog-form"); await tick();
+  assert.match(app.get("catalog-state-message").textContent, /No recorded matches.*not a whole-market result/);
+  assert.equal(app.get("inspection-state").textContent, "");
+});
+
+for (const phase of ["answer", "search", "inspect"]) {
+  test(phase + " completion does not move focus away from another page", async (t) => {
+    let finish;
+    const endpoint = { answer: "/api/v1/agent/answer", search: "/api/v1/costar/search", inspect: "/api/v1/costar/inspect" }[phase];
+    const app = boot(t, (url, options) => {
+      if (url === endpoint) return new Promise((resolve) => { finish = resolve; });
+      if (url === "/api/v1/agent/status") return response(agentStatus({ costar_enabled: true, matterport_enabled: true }));
+      return catalogRoute(url, options);
+    });
+    if (phase === "inspect") { await showCatalog(app); app.get("catalog-evidence").querySelector(".inspect-floor-plan").click(); }
+    else {
+      await tick(); await openAsk(app);
+      if (phase === "answer") { typeQuestion(app); app.submit("ask-form"); }
+      else app.submit("catalog-form");
+    }
+    const overview = app.document.querySelector('[data-view="overview"]'); overview.click(); overview.focus();
+    finish(response({ answer: agentAnswer(), search: catalogResponse(), inspect: inspectionResponse() }[phase])); await tick();
+    assert.equal(app.document.activeElement, overview);
+    assert.equal(app.get("ask-view").classList.contains("hidden"), true);
+    const status = app.get({ answer: "ask-state", search: "catalog-state-message", inspect: "inspection-state" }[phase]);
+    assert.match(status.textContent, /ready|complete/);
+  });
+}
+
+for (const phase of ["search", "inspect"]) {
+  test("explicit " + phase + " cancellation restores the correct current control and ignores late completion", async (t) => {
+    let finish;
+    const endpoint = phase === "search" ? "/api/v1/costar/search" : "/api/v1/costar/inspect";
+    const app = boot(t, (url, options) => url === endpoint ? new Promise((resolve) => { finish = resolve; }) : catalogRoute(url, options));
+    let target;
+    if (phase === "inspect") {
+      await showCatalog(app); target = app.get("catalog-evidence").querySelectorAll(".inspect-floor-plan")[1]; target.click();
+    } else { await tick(); await openAsk(app); target = app.get("catalog-submit"); app.submit("catalog-form"); }
+    const cancel = app.get(phase === "search" ? "catalog-cancel" : "inspection-cancel");
+    cancel.focus(); assert.equal(app.document.activeElement, cancel); cancel.click();
+    assert.equal(app.document.activeElement, target);
+    assert.equal(target.disabled, false);
+    assert.equal(cancel.classList.contains("hidden"), true);
+    const status = app.get(phase === "search" ? "catalog-state-message" : "inspection-state");
+    assert.match(status.textContent, /Stopped waiting/);
+    finish(response(phase === "search" ? catalogResponse() : inspectionResponse({ property_id: 21, floor_plan_id: 31 }))); await tick();
+    assert.equal(app.document.activeElement, target);
+    assert.match(status.textContent, /Stopped waiting/);
+  });
+}
+
+test("cancel focus restoration skips hidden pages, detached selection buttons, and invalidated contexts", async (t) => {
+  const app = boot(t, (url, options) => url === "/api/v1/costar/inspect" ? new Promise(() => {}) : catalogRoute(url, options));
+  await showCatalog(app);
+  let target = app.get("catalog-evidence").querySelector(".inspect-floor-plan");
+  target.click();
+  const overview = app.document.querySelector('[data-view="overview"]'); overview.click(); overview.focus();
+  app.click("inspection-cancel");
+  assert.equal(app.document.activeElement, overview);
+  await openAsk(app);
+  target.click(); app.get("inspection-cancel").focus(); target.remove(); app.click("inspection-cancel");
+  assert.notEqual(app.document.activeElement, target);
+  target = app.get("catalog-evidence").querySelector(".inspect-floor-plan");
+  target.click(); app.click("refresh-button"); await tick();
+  app.get("refresh-button").focus(); app.click("inspection-cancel");
+  assert.equal(app.document.activeElement, app.get("refresh-button"));
+  assert.equal(app.get("inspection-state").textContent, "");
 });

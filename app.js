@@ -28,6 +28,7 @@
   let inspectionController = null;
   let inspectionTimer = null;
   let inspectionPending = false;
+  let inspectionReturnFocus = null;
   let catalogSequence = 0;
   let catalogController = null;
   let catalogTimer = null;
@@ -323,11 +324,17 @@
       Array.isArray(result.limitations) && result.limitations.every((item) => typeof item === "string") &&
       JSON.stringify(result).length <= 96000;
   }
+  function restoreCancelledFocus(target, context) {
+    if (context === answerContext && data && !dashboardLoading && !$("ask-view").classList.contains("hidden") &&
+        !$("dashboard-data").classList.contains("hidden") && target?.isConnected && !target.disabled && !target.closest(".hidden")) target.focus();
+  }
   $("catalog-cancel").addEventListener("click", () => {
     if (!catalogPending) return;
+    const context = answerContext;
     clearCatalog();
     $("catalog-state-message").textContent = "Stopped waiting for the catalog search. No result was accepted.";
     updateAskControls();
+    restoreCancelledFocus($("catalog-submit"), context);
   });
   $("catalog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -341,6 +348,7 @@
     clearAskAnswer();
     const requestId = catalogSequence;
     const context = answerContext;
+    let completionMessage = "";
     catalogController = new AbortController();
     catalogPending = true;
     $("ask-error").textContent = "";
@@ -375,6 +383,7 @@
       $("catalog-source").textContent = "Catalog revision: " + result.source_hash;
       $("catalog-evidence").append(renderToolEvidence({ tool: "costar_search", arguments: criteria, result }, true));
       $("catalog-result").classList.remove("hidden");
+      completionMessage = result.results.length ? "Catalog search complete. " + result.results.length + " recorded matches returned. Review the direct results and rent ranges below." : "Catalog search complete. No recorded matches were returned for these filters; this is not a whole-market result.";
     } catch (error) {
       if (requestId !== catalogSequence || context !== answerContext || error.name === "AbortError") return;
       $("catalog-error").textContent = "A valid catalog response could not be received. No results were accepted.";
@@ -382,7 +391,7 @@
       if (requestId === catalogSequence && context === answerContext) {
         clearTimeout(catalogTimer);
         catalogPending = false;
-        $("catalog-state-message").textContent = "";
+        $("catalog-state-message").textContent = completionMessage;
         updateAskControls();
       }
     }
@@ -410,16 +419,19 @@
     clearTimeout(inspectionTimer);
     inspectionController = null;
     inspectionPending = false;
+    inspectionReturnFocus = null;
     $("inspection-result").classList.add("hidden");
     for (const id of ["inspection-selection", "inspection-state", "inspection-error", "inspection-source"]) $(id).textContent = "";
     $("inspection-evidence").replaceChildren();
   }
   $("inspection-cancel").addEventListener("click", () => {
     if (!inspectionPending) return;
+    const returnFocus = inspectionReturnFocus;
     clearInspection();
     $("inspection-result").classList.remove("hidden");
     $("inspection-state").textContent = "Stopped waiting for the inspection. No result was accepted.";
     updateAskControls();
+    if (returnFocus) restoreCancelledFocus(returnFocus.button, returnFocus.context);
   });
   function validInspection(result, selection) {
     return object(result) && result.status === "ok" && result.source_kind === "matterport_model_api" &&
@@ -435,8 +447,10 @@
     if (selection.context !== answerContext || !button.isConnected || !data || dashboardLoading || askPending || askStatusLoading || inspectionPending || catalogPending || askStatus?.matterport_enabled !== true) return;
     clearInspection();
     const requestId = inspectionSequence;
+    let completionMessage = "";
     inspectionController = new AbortController();
     inspectionPending = true;
+    inspectionReturnFocus = { button, context: selection.context };
     $("inspection-result").classList.remove("hidden");
     $("inspection-selection").textContent = selection.name + " · Property " + selection.request.property_id + " / Floor plan " + selection.request.floor_plan_id;
     $("inspection-state").textContent = "Reading the catalog-linked model for this floor plan…";
@@ -467,6 +481,7 @@
       if (!validInspection(result, selection)) throw new Error("invalid inspection");
       $("inspection-source").textContent = "Catalog revision: " + result.catalog_source_hash + " · Model: " + result.model_id;
       $("inspection-evidence").append(renderToolEvidence({ tool: "inspect_floor_plan", arguments: selection.request, result }, true));
+      completionMessage = "Inspection complete. Review the direct evidence, reported units, and missing measurements below. Furniture fit was not verified.";
     } catch (error) {
       if (requestId !== inspectionSequence || selection.context !== answerContext || error.name === "AbortError") return;
       $("inspection-error").textContent = "A valid inspection response could not be received. No measurements were accepted.";
@@ -474,7 +489,7 @@
       if (requestId === inspectionSequence && selection.context === answerContext) {
         clearTimeout(inspectionTimer);
         inspectionPending = false;
-        $("inspection-state").textContent = "";
+        $("inspection-state").textContent = completionMessage;
         updateAskControls();
       }
     }
@@ -579,6 +594,7 @@
     const question = $("ask-question").value.trim();
     if (!question || $("ask-question").value.length > 2000) { $("ask-error").textContent = "Enter a question of 1 to 2000 characters."; return; }
     const requestId = ++askSequence;
+    let completionMessage = "";
     askController?.abort();
     askController = new AbortController();
     askPending = true;
@@ -599,11 +615,12 @@
       if (requestId !== askSequence) return;
       if (!validAskAnswer(result)) throw new Error("invalid answer");
       renderAskAnswer(result, question);
+      completionMessage = { answered: "Answer ready. Review the answer and supporting evidence below.", limited: "Request limit reached. Review the completed evidence and limits below.", unavailable: "Answer unavailable. Review any returned evidence and limitations below." }[result.status];
     } catch (error) {
       if (requestId !== askSequence || error.name === "AbortError") return;
       $("ask-error").textContent = "A valid answer could not be received. Check the connection and try again.";
     } finally {
-      if (requestId === askSequence) { clearTimeout(askTimer); askPending = false; $("ask-state").textContent = ""; updateAskControls(); }
+      if (requestId === askSequence) { clearTimeout(askTimer); askPending = false; $("ask-state").textContent = completionMessage; updateAskControls(); }
     }
   });
 
