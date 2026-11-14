@@ -8,7 +8,7 @@ This is a proposed script, not evidence of sponsor eligibility or real business 
 Show the fictional-data badge immediately. This reproducible cafe demonstration is not a real owner's dataset.
 
 ## 0:15–0:45 — Trace a customer pattern
-Show net sales and returning share. Select Slipping: customers with at least two observed purchases and a gap over 30 days. Open one customer and point to the group rule, selected-period totals, and earlier purchase history. Explain that this is an observed pattern, not a churn prediction.
+Show net sales and returning share. Select Quiet repeat buyers: customers with at least two observed purchases and a gap over 30 days. Open one customer and point to the group rule, selected-period totals, and earlier purchase history. Explain that this is an observed pattern, not a churn prediction.
 
 ## 0:45–1:15 — Investigate the sales change
 Return to Overview and ask exactly "What changed in revenue?" Show the earlier/current totals and group contributions, which add up to the change. Expand Calculation details only if needed. The evidence identifies where the recorded change occurred; it does not establish why behavior changed.
@@ -25,4 +25,4 @@ Open Data source and show preview-before-import, purchase/refund totals, immutab
 - Actual business consultation and permission to describe it for Peri; see [owner interview](OWNER_INTERVIEW.md).
 - Live provider demonstration for AI integration claims.
 - Confirmed current event rules and final track selection.
-- A new public repository and submission if the user chooses to publish; this local fork has not been published.
+- Verify repository creation and visibility against the event rules. Pushing a branch does not complete a hackathon submission.

@@ -53,7 +53,7 @@ The implemented optional merchant adapter paginates accounts and transactions, r
 
 The supplied packet says November 15 at 8:00 a.m.; the current [official Devpost schedule](https://hackprinceton-fall-26.devpost.com/details/dates) lists 8:30 a.m. EST. Work against the earlier time until organizers resolve the discrepancy.
 
-The [official Devpost page](https://hackprinceton-fall-26.devpost.com/) asks for a public GitHub repository created November 13-15, Discord usernames, and an in-person demonstration of at most two minutes; the video is optional. This local project has not been published or submitted by this work. Select one main track and only claim sponsor integrations and consultation evidence that can be demonstrated.
+The [official Devpost page](https://hackprinceton-fall-26.devpost.com/) asks for a public GitHub repository created November 13-15, Discord usernames, and an in-person demonstration of at most two minutes; the video is optional. This work has not created a new public repository or submitted the project; a branch push to the existing repository does not establish submission eligibility. Select one main track and only claim sponsor integrations and consultation evidence that can be demonstrated.
 
 
 For a concise real-business validation conversation, see [owner interview](OWNER_INTERVIEW.md). No consultation is implied by that preparation guide.

@@ -5,7 +5,7 @@
   const customerState = { id: null, opener: null, sequence: 0, controller: null, busy: false, bound: null, nextOffset: null, total: null, events: [] };
   const savedState = { canSave: null, items: [], nextOffset: null, total: 0, listSequence: 0, listController: null, listBusy: false, saveSequence: 0, saveController: null, saveBusy: false, detailSequence: 0, detailController: null, current: null, opener: null, noteSequence: 0, noteController: null, noteBusy: false };
   const colors = { champions: '#315b43', regulars: '#78966b', promising: '#b7c89e', slipping: '#bb8059', new: '#ddd9bd' };
-  const labels = { champions: 'Champions', regulars: 'Regulars', promising: 'Promising', slipping: 'Slipping away', new: 'New faces' };
+  const labels = { champions: 'Champions', regulars: 'Regulars', promising: 'Other buyers', slipping: 'Quiet repeat buyers', new: 'Newly observed' };
   const money = (value) => Number.isFinite(value) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value / 100) : '—';
   const integer = (value) => Number.isFinite(value) ? new Intl.NumberFormat('en-US').format(value) : '—';
   const percent = (value) => Number.isFinite(value) ? `${Math.round(value * 100)}%` : '—';
@@ -506,7 +506,7 @@
       const note = await fetchJson(`/api/v1/owner/pilots/${encodeURIComponent(record.id)}/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ observed_on, text }), signal: savedState.noteController.signal });
       if (sequence !== savedState.noteSequence || detailSequence !== savedState.detailSequence) return;
       if (!note.id || note.pilot_id !== record.id || note.verification !== 'owner_reported' || note.observed_on !== observed_on || note.text !== text) throw new Error('The saved observation did not match your note. Open the draft again to verify it.');
-      if (!record.notes.some((existing) => existing.id === note.id)) record.notes.push(note); renderSavedNotes(); $('pilot-note-text').value = ''; const listed = savedState.items.find((item) => item.id === record.id); if (listed) listed.note_count = record.notes.length; renderSavedList(); setText('pilot-note-status', 'Owner observation saved. It is not verified evidence of assignment or uplift and was not sent to AI.'); $('pilot-note-text').disabled = false; $('pilot-note-text').focus();
+      if (!record.notes.some((existing) => existing.id === note.id)) record.notes.push(note); renderSavedNotes(); $('pilot-note-text').value = ''; const listed = savedState.items.find((item) => item.id === record.id); if (listed) listed.note_count = record.notes.length; renderSavedList(); setText('pilot-note-status', 'Owner observation saved.'); $('pilot-note-text').disabled = false; $('pilot-note-text').focus();
     } catch (error) { if (sequence !== savedState.noteSequence || detailSequence !== savedState.detailSequence || error.name === 'AbortError') return; if (error.auth) unlockRequired(); else setText('pilot-note-status', `${error.message || 'The observation could not be saved.'}${savedState.noteBusy ? ' Open the saved draft again before retrying if the connection was interrupted.' : ''}`); }
     finally { if (sequence === savedState.noteSequence) { savedState.noteBusy = false; ['pilot-note-date', 'pilot-note-text', 'pilot-note-submit'].forEach((id) => { $(id).disabled = false; }); } }
   }

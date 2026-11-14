@@ -40,10 +40,10 @@
 
 ## Verification boundaries
 - No private `.env` reads or indirect loading during agent checks; all Compose verification passes `--env-file .env.example`.
-- No live AI provider, Nessie import, outbound messages, deployment, public repository publication or hackathon submission is claimed.
+- No live AI provider, Nessie import, outbound messages, deployment, newly created public repository or hackathon submission is claimed. The user requested a branch push to the existing repository.
 - Sponsor criteria and outstanding eligibility evidence are recorded in `SPONSOR_FIT.md`; `OWNER_INTERVIEW.md` prepares a real consultation without implying one occurred.
 
-Development remains continuous at the user's request until explicitly stopped.
+Development paused at the user's explicit request on 2026-11-14. Agents were interrupted; only the requested branch handoff remains.
 
-## Current pass
-The durable-pilot workflow is complete and verified. Next: tighten owner-facing group/chart wording to match observed evidence, and continue focused review of practical owner tasks.
+## Paused handoff
+The durable-pilot workflow is complete and verified at `dbd2b95`. The final wording pass aligns group labels with observed evidence while retaining all group IDs and calculations. Push this branch to the existing GitHub repository and leave further development paused.

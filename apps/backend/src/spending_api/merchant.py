@@ -22,9 +22,9 @@ COVERAGE_START = COVERAGE_END - timedelta(days=89)
 SEGMENT_RULES = {
     "champions": ("Champions", "At least 10 observed orders and a purchase within 21 days of the observed cutoff."),
     "regulars": ("Regulars", "At least 4 observed orders and a purchase within 30 days of the observed cutoff; not Champions."),
-    "promising": ("Promising", "Other customers with at least 2 observed orders, or a single older order."),
-    "slipping": ("Slipping", "At least 2 observed orders, with the latest purchase more than 30 days before the observed cutoff."),
-    "new": ("New faces", "One observed order, first seen within 14 days of the observed cutoff."),
+    "promising": ("Other buyers", "One observed purchase more than 14 days ago, or 2-3 observed purchases with the latest within 30 days of the observed cutoff."),
+    "slipping": ("Quiet repeat buyers", "At least 2 observed orders, with the latest purchase more than 30 days before the observed cutoff."),
+    "new": ("Newly observed", "One observed order, first seen within 14 days of the observed cutoff."),
 }
 
 
@@ -222,7 +222,7 @@ def build_dashboard(start: date | None = None, end: date | None = None,
     repeated = sum(period_counts[customer] >= 2 for customer in active_ids)
     actions = []
     templates = {
-        "slipping": ("Reconnect with quiet regulars", "Review a small welcome-back offer", "Observed gap over 30 days; this is a rule, not a churn prediction."),
+        "slipping": ("Reconnect with quiet repeat buyers", "Review a small welcome-back offer", "Observed gap over 30 days; this is a rule, not a churn prediction."),
         "new": ("Make a second visit easy", "Test a second-visit invitation", "These customers have one observed order within the last 14 days."),
         "champions": ("Learn from your regulars", "Invite feedback on a new menu item", "Frequent recent buyers can help you test an idea before a wider release."),
     }
