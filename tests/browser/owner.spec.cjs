@@ -164,6 +164,19 @@ test('reviewed synthetic CSV import persists separately and demo is restored', a
     await expect(page.locator('#repeat-caveat')).toContainText('No supplied purchase history');
     await expect(page.locator('#customers tr')).toHaveCount(1);
     await capture(page, 'owner-desktop-imported-repeat.png');
+    const importedDetail = await customerEvidence(request, persisted, 'browser_customer_1');
+    await page.locator('[data-customer-id="browser_customer_1"]').click();
+    await expect(page.locator('#customer-evidence-content')).toBeVisible();
+    await expectCustomerMetrics(page, importedDetail);
+    expect(importedDetail.observed_history).toMatchObject({ orders: 2, gross_revenue_cents: 2500, refund_cents: 200, net_revenue_cents: 2300 });
+    const refund = page.locator('#customer-events [data-event-id="refund:browser_refund_1"]');
+    await expect(refund.locator('.customer-event-amount')).toHaveText('\u2212$2.00');
+    await expect(refund).toContainText('Original order browser_order_1');
+    await expect(refund).toContainText('In selected period');
+    await capture(page, 'owner-desktop-customer-refund.png', false);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#customer-drawer')).toBeHidden();
+    await expect(page.locator('[data-customer-id="browser_customer_1"]')).toBeFocused();
     await page.locator('[data-view="experiments"]').click();
     await expect(page.locator('#actions button')).toHaveCount(0);
     await expect(page.locator('#actions')).toContainText('No automatic suggestion applies');
@@ -313,5 +326,185 @@ test('future end date preserves observed recency and withholds pilots until cove
   await expect(page.locator('#actions button')).not.toHaveCount(0);
   await page.locator('#manual-pilot').click();
   await expect(page.locator('#draft-card')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+async function customerEvidence(request, snapshot, id, limit = 50) {
+  const query = new URLSearchParams({ ...snapshot.period, limit: String(limit), expected_revision: snapshot.source.revision });
+  const response = await request.get(`/api/v1/owner/customers/${encodeURIComponent(id)}?${query}`);
+  expect(response.status(), await response.text()).toBe(200);
+  return response.json();
+}
+async function expectCustomerMetrics(page, detail) {
+  expect(detail.observed_history.orders).toBeGreaterThanOrEqual(detail.period_metrics.orders);
+  expect(detail.period_metrics.orders).toBe(detail.customer.orders);
+  expect(detail.period_metrics.net_revenue_cents).toBe(detail.customer.revenue_cents);
+  for (const [id, metrics] of [['customer-history-metrics', detail.observed_history], ['customer-period-metrics', detail.period_metrics]]) {
+    await expect(page.locator(`#${id} dd`)).toHaveText([
+      String(metrics.orders), dollars(metrics.gross_revenue_cents), `\u2212${dollars(metrics.refund_cents)}`, dollars(metrics.net_revenue_cents),
+    ]);
+  }
+  await expect(page.locator('#customer-evidence-title')).toHaveText(detail.customer.label);
+  await expect(page.locator('#customer-evidence-group')).toHaveText(detail.segment.label);
+  await expect(page.locator('#customer-evidence-rule')).toHaveText(detail.segment.description);
+  await expect(page.locator('#customer-evidence-cutoff')).toContainText(detail.segment.as_of);
+  await expect(page.locator('#customer-evidence-scope')).toContainText(`all ${detail.observed_history.orders} observed completed purchases`);
+  await expect(page.locator('#customer-evidence-scope')).toContainText(`table's ${detail.period_metrics.orders} purchases`);
+}
+
+for (const device of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 375, height: 812 }]) {
+  test(`${device.name} customer drawer reconciles history and clears evidence on date changes`, async ({ page, request }) => {
+    const errors = observe(page);
+    await page.setViewportSize({ width: device.width, height: device.height });
+    const snapshot = await (await request.get('/api/v1/owner/dashboard')).json();
+    const customer = snapshot.customers.find(row => row.segment === 'champions' && row.first_seen < snapshot.period.start && row.orders > 0);
+    expect(customer, 'Demo must expose a regular with history before this period').toBeTruthy();
+    const detail = await customerEvidence(request, snapshot, customer.id);
+    expect(detail.events.some(event => !event.within_period)).toBe(true);
+    await ready(page);
+    await page.locator('[data-view="customers"]').click();
+    const opener = page.locator(`[data-customer-id="${customer.id}"]`);
+    const detailEvent = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/owner/customers/${customer.id}`);
+    await opener.click();
+    const opened = await detailEvent;
+    expect(opened.status()).toBe(200);
+    const query = new URL(opened.url()).searchParams;
+    expect(query.get('expected_revision')).toBe(snapshot.source.revision);
+    expect(query.get('start')).toBe(snapshot.period.start);
+    expect(query.get('end')).toBe(snapshot.period.end);
+    await expect(page.locator('#customer-evidence-content')).toBeVisible();
+    await expectCustomerMetrics(page, detail);
+    await expect(page.locator('#close-customer-drawer')).toBeFocused();
+    await expect(page.locator('#customer-events > li')).toHaveCount(detail.events.length);
+    await expect(page.locator('#customer-events .outside').first()).toHaveText('Outside selected period');
+    const drawerSize = await page.locator('#customer-drawer').evaluate(node => ({ client: node.clientWidth, content: node.scrollWidth }));
+    expect(drawerSize.content, JSON.stringify(drawerSize)).toBeLessThanOrEqual(drawerSize.client + 1);
+    await noOverflow(page);
+    await capture(page, `owner-${device.name}-customer-drawer.png`, false);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#customer-drawer')).toBeHidden();
+    await expect(page.locator('#customer-events > li')).toHaveCount(0);
+    await expect(opener).toBeFocused();
+
+    await opener.click();
+    await expect(page.locator('#customer-evidence-content')).toBeVisible();
+    const changedStart = new Date(snapshot.period.start + 'T12:00:00Z');
+    changedStart.setUTCDate(changedStart.getUTCDate() + 1);
+    // Date controls are correctly inert behind the modal. Dispatch an external
+    // state edit to exercise the same invalidation path while evidence is open.
+    await page.locator('#start-date').evaluate((input, value) => {
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, changedStart.toISOString().slice(0, 10));
+    await expect(page.locator('#customer-drawer')).toBeHidden();
+    await expect(page.locator('#customer-evidence-content')).toBeHidden();
+    await expect(page.locator('#customer-events > li')).toHaveCount(0);
+    await expect(page.locator('#customer-history-metrics')).toBeEmpty();
+    await expect(page.locator('#customer-period-metrics')).toBeEmpty();
+    await expect(page.locator('#customer-evidence-title')).toHaveText('Customer evidence');
+    const changedEvent = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/owner/dashboard');
+    await page.locator('#date-form button[type="submit"]').click();
+    const changed = await (await changedEvent).json();
+    expect(changed.period.start).toBe(changedStart.toISOString().slice(0, 10));
+    const changedDetail = await customerEvidence(request, changed, customer.id);
+    await page.locator(`[data-customer-id="${customer.id}"]`).click();
+    await expect(page.locator('#customer-evidence-content')).toBeVisible();
+    await expectCustomerMetrics(page, changedDetail);
+    await expect(page.locator('#customer-period-dates')).toContainText(changed.period.start);
+    await page.keyboard.press('Escape');
+    expect(errors).toEqual([]);
+  });
+}
+
+test('customer timeline pages through 60 synthetic purchases without duplication and restores selection', async ({ page, request }) => {
+  const errors = observe(page);
+  const before = (await (await request.get('/api/v1/owner/datasets')).json()).active_id;
+  const rows = ['kind,id,customer_id,order_id,date,amount_cents,status'];
+  for (let index = 0; index < 60; index++) {
+    const day = new Date('2026-09-16T12:00:00Z');
+    day.setUTCDate(day.getUTCDate() + index);
+    rows.push(`order,browser_page_order_${String(index + 1).padStart(2, '0')},browser_page_customer,,${day.toISOString().slice(0, 10)},${1000 + index},completed`);
+  }
+  const fixture = { csv: rows.join('\n') + '\n', business_name: 'Browser QA synthetic timeline cafe', synthetic: true };
+  try {
+    // API setup creates only this explicitly synthetic immutable fixture. The
+    // drawer itself uses unmodified browser requests and the real customer API.
+    const previewResponse = await request.post('/api/v1/owner/import/preview', { data: fixture });
+    expect(previewResponse.status(), await previewResponse.text()).toBe(200);
+    const preview = await previewResponse.json();
+    expect(preview.synthetic).toBe(true);
+    const committed = await request.post('/api/v1/owner/import/commit', { data: { ...fixture, preview_hash: preview.preview_hash } });
+    expect(committed.status(), await committed.text()).toBe(200);
+    const datasetId = (await committed.json()).dataset_id;
+    const snapshot = await (await request.get('/api/v1/owner/dashboard')).json();
+    expect(snapshot.source.dataset_id).toBe(datasetId);
+    expect(snapshot.source.synthetic).toBe(true);
+    const expected = await customerEvidence(request, snapshot, 'browser_page_customer', 100);
+    expect(expected.pagination.total).toBe(60);
+    expect(expected.observed_history.orders).toBe(60);
+    expect(expected.period_metrics.orders).toBe(30);
+    await ready(page);
+    await page.locator('[data-view="customers"]').click();
+    await page.locator('[data-customer-id="browser_page_customer"]').click();
+    await expect(page.locator('#customer-events > li')).toHaveCount(50);
+    await expectCustomerMetrics(page, expected);
+    await expect(page.locator('#customer-event-count')).toHaveText('50 of 60 observed records shown');
+    await expect(page.locator('#customer-load-more')).toBeVisible();
+    const pageEvent = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/owner/customers/browser_page_customer' && new URL(response.url()).searchParams.get('offset') === '50');
+    await page.locator('#customer-load-more').click();
+    const nextResponse = await pageEvent;
+    expect(nextResponse.status()).toBe(200);
+    expect(new URL(nextResponse.url()).searchParams.get('expected_revision')).toBe(snapshot.source.revision);
+    const next = await nextResponse.json();
+    expect(next.pagination).toEqual({ offset: 50, limit: 50, total: 60, next_offset: null });
+    await expect(page.locator('#customer-events > li')).toHaveCount(60);
+    const displayed = await page.locator('#customer-events > li').evaluateAll(nodes => nodes.map(node => node.dataset.eventId));
+    expect(new Set(displayed).size).toBe(60);
+    expect(displayed).toEqual(expected.events.map(event => `${event.kind}:${event.id}`));
+    await expect(page.locator('#customer-event-count')).toHaveText('60 of 60 observed records shown');
+    await expect(page.locator('#customer-load-more')).toBeHidden();
+    await expect(page.locator('#customer-events .outside')).toHaveCount(30);
+    await page.locator('#customer-drawer').evaluate(node => { node.scrollTop = 0; });
+    await capture(page, 'owner-desktop-customer-paginated.png', false);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-customer-id="browser_page_customer"]')).toBeFocused();
+    expect(errors).toEqual([]);
+  } finally {
+    await select(request, before);
+  }
+});
+
+test('offline revenue change answer matches the same period comparison evidence', async ({ page, request }) => {
+  const errors = observe(page);
+  const comparison = await (await request.get('/api/v1/owner/compare')).json();
+  await ready(page);
+  await page.locator('#question').fill('What changed in revenue?');
+  const answerEvent = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/owner/ask');
+  await page.locator('#ask-submit').click();
+  const response = await answerEvent;
+  expect(response.status()).toBe(200);
+  const answer = await response.json();
+  expect(answer.provider).toBe('deterministic');
+  expect(answer.status).toBe('answered');
+  expect(answer.source.revision).toBe(comparison.source.revision);
+  expect(answer.period).toEqual(comparison.current.period);
+  expect(answer.evidence).toHaveLength(1);
+  const evidence = answer.evidence[0];
+  expect(evidence.available).toBe(true);
+  expect(evidence.baseline.period).toEqual(comparison.baseline.period);
+  expect(evidence.current.period).toEqual(comparison.current.period);
+  expect(evidence.baseline.metrics.net_revenue_cents).toBe(comparison.baseline.metrics.net_revenue_cents);
+  expect(evidence.current.metrics.net_revenue_cents).toBe(comparison.current.metrics.net_revenue_cents);
+  expect(evidence.delta_cents).toBe(comparison.delta_cents);
+  expect(evidence.reconciled_delta_cents).toBe(comparison.groups.reduce((sum, row) => sum + row.delta_cents, 0));
+  expect(evidence.groups.map(row => [row.id, row.baseline_cents, row.current_cents, row.delta_cents]).sort())
+    .toEqual(comparison.groups.map(row => [row.id, row.baseline_cents, row.current_cents, row.delta_cents]).sort());
+  await expect(page.locator('#answer')).toHaveText(answer.answer);
+  await expect(page.locator('#answer')).toContainText(dollars(comparison.current.metrics.net_revenue_cents));
+  await expect(page.locator('#answer')).toContainText(dollars(comparison.baseline.metrics.net_revenue_cents));
+  await expect(page.locator('#answer')).toContainText(dollars(comparison.delta_cents));
+  await expect(page.locator('#answer')).toContainText('not why customer behavior changed');
+  await expect(page.locator('#evidence')).toContainText(dollars(comparison.delta_cents));
+  await page.locator('#ask-result').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '/artifacts/owner-desktop-revenue-change-answer.png', animations: 'disabled' });
   expect(errors).toEqual([]);
 });

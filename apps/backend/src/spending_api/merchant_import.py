@@ -7,6 +7,7 @@ import io
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -76,9 +77,17 @@ def parse_csv(text: str, *, business_name: str, synthetic: bool = False,
                    business_name=business_name.strip())
     _validate(data)
     digest = hashlib.sha256(encode_dataset(data).encode()).hexdigest()
+    completed = [row for row in orders if row.status == 'completed']
+    gross = sum(row.amount_cents for row in completed)
+    refunded = sum(row.amount_cents for row in refunds)
     preview = {
         'preview_hash': digest, 'business_name': data.business_name,
         'orders': len(orders), 'refunds': len(refunds),
+        'completed_orders': len(completed), 'excluded_orders': len(orders) - len(completed),
+        'pending_orders': sum(row.status == 'pending' for row in orders),
+        'cancelled_orders': sum(row.status == 'cancelled' for row in orders),
+        'gross_revenue_cents': gross, 'refund_cents': refunded,
+        'net_revenue_cents': gross - refunded,
         'customers': len({row.customer_id for row in orders if row.status == 'completed'}),
         'coverage_start': start.isoformat(), 'coverage_end': end.isoformat(),
         'synthetic': synthetic,
@@ -120,8 +129,14 @@ class DatasetStore:
             db.execute('CREATE TABLE IF NOT EXISTS selection (singleton INTEGER PRIMARY KEY CHECK(singleton=1), dataset_id TEXT NOT NULL)')
             db.execute("INSERT OR IGNORE INTO selection VALUES(1,'demo')")
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(self.path, timeout=10)
+        connection = sqlite3.connect(self.path, timeout=10)
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def add(self, data: Dataset, expected_hash: str, *, select: bool = True) -> str:
         raw = encode_dataset(data)

@@ -54,7 +54,7 @@ CMD ["uvicorn", "spending_api.main:create_app", "--factory", "--host", "0.0.0.0"
 FROM backend-tests AS merchant-tests
 COPY scripts/import_merchant_nessie.py scripts/import_merchant_nessie.py
 COPY scripts/smoke_owner.py scripts/smoke_owner.py
-CMD ["/app/.venv/bin/pytest", "-q", "-p", "no:cacheprovider", "tests/test_merchant.py", "tests/test_merchant_import.py", "tests/test_merchant_compare.py", "tests/test_merchant_ai.py", "tests/test_merchant_api_import.py", "tests/test_merchant_experiments.py", "tests/test_merchant_nessie.py"]
+CMD ["/app/.venv/bin/pytest", "-q", "-p", "no:cacheprovider", "tests/test_merchant.py", "tests/test_merchant_import.py", "tests/test_merchant_compare.py", "tests/test_merchant_ai.py", "tests/test_merchant_api_import.py", "tests/test_merchant_experiments.py", "tests/test_merchant_nessie.py", "tests/test_merchant_customers.py"]
 
 FROM backend AS merchant-backend
 COPY scripts/smoke_owner.py /app/scripts/smoke_owner.py

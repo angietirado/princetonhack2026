@@ -43,7 +43,10 @@ You cannot read files, browse, run shell commands, contact people, or execute ca
 If the question needs unavailable evidence, explain that limit rather than guessing."""
 ANALYST_PROMPT = """Investigate using only the supplied aggregate tools.
 Read the summary before making factual claims. Use cohorts or segments to investigate
-the owner's specific question, then optionally calculate a bounded experiment plan.
+the owner's specific question. For changes, declines or growth, read owner_revenue_change.
+Use only its bound equal-length periods. If unavailable, do not infer change from a single
+period. Incomplete coverage forbids rate/percentage claims; group contributions do not
+establish causes. Then optionally calculate a bounded experiment plan.
 Respect explicit constraints. If an experiment's audience, offer or duration is missing,
 ask for it instead of silently inventing it. A test plan is a proposal, never an outcome.
 Use integer cents. Compare neither unmatched periods nor incomplete cohort cells.
@@ -157,6 +160,9 @@ def _projection(snapshot: dict) -> dict:
             "cohorts": "First-observed monthly cohorts. Month 0 includes observed cohort members; later incomplete months are null.",
         },
     }
+    if snapshot.get("comparison") is not None or "comparison_unavailable_reason" in snapshot:
+        from spending_api.merchant_compare import aggregate_comparison
+        projected["comparison"] = aggregate_comparison(snapshot)
     encoded = _json(projected)
     if len(encoded.encode()) > MAX_TOOL_BYTES:
         raise ValueError("Aggregate payload exceeds limit")
@@ -169,6 +175,10 @@ def _redact_question(question: str, snapshot: dict) -> str:
     # are masked even when the owner types them into their question.
     values = {str(row[key]) for row in snapshot.get("customers", []) for key in ("id", "label")
               if isinstance(row, dict) and isinstance(row.get(key), str) and row[key]}
+    comparison = snapshot.get("comparison")
+    if isinstance(comparison, dict):
+        values.update(row["customer_id"] for row in comparison.get("contributors", [])
+                      if isinstance(row, dict) and isinstance(row.get("customer_id"), str) and row["customer_id"])
     result = question
     for value in sorted(values, key=len, reverse=True):
         result = re.sub(r"(?<!\w)" + re.escape(value) + r"(?!\w)", "[customer]", result, flags=re.IGNORECASE)
@@ -203,6 +213,12 @@ def _tools(projected: dict):
         return {"status": "ok", "aggregate_hash": projected["aggregate_hash"], "period": projected["period"],
                 "segments": copy.deepcopy(projected["segments"]), "definition": projected["definitions"]["segments"]}
 
+    def revenue_change():
+        from spending_api.merchant_compare import aggregate_comparison
+        comparison = projected.get("comparison")
+        return {"status": "ok", "aggregate_hash": projected["aggregate_hash"],
+                **copy.deepcopy(comparison if comparison is not None else aggregate_comparison({}))}
+
     def plan(segment, max_customers, offer_cents, window_days, budget_cents=None):
         from spending_api.merchant_experiments import plan_experiment
 
@@ -222,6 +238,7 @@ def _tools(projected: dict):
         (summary, "owner_summary", "Read observed revenue, order totals, dates, coverage and daily trend.", EmptyQuery),
         (cohorts, "owner_cohorts", "Read first-observed monthly cohorts; null cells are incomplete or unavailable.", EmptyQuery),
         (segments, "owner_segments", "Read aggregate behavior segments and observed selected-period revenue.", EmptyQuery),
+        (revenue_change, "owner_revenue_change", "Explain observed revenue change using bound adjacent equal-length periods and complete aggregate group contributions. Check available and coverage flags; no customer identities or causal claims.", EmptyQuery),
         (plan, "plan_owner_experiment", "Calculate a proposed randomized pilot and maximum offer cost from explicit owner constraints; never sends or assigns.", ExperimentQuery),
     ]
     return [StructuredTool.from_function(fn, name=name, description=description, args_schema=schema)

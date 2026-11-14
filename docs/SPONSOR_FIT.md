@@ -14,7 +14,7 @@ The local F26 Onsite Hacker Packet supplied in the earlier project is the source
 
 | Opportunity | Criteria from the packet | Honest fit and present status |
 | --- | --- | --- |
-| LangChain: best use of deepagents | Page 16 specifically names the Deep Agents harness and allows any use case. | Optional owner investigation uses actual create_deep_agent and a compiled analyst with aggregate summary, cohorts, segments and experiment tools. Scripted offline tests exercise delegation. No live model success is claimed. |
+| LangChain: best use of deepagents | Page 16 specifically names the Deep Agents harness and allows any use case. | Optional owner investigation uses actual create_deep_agent and a compiled analyst with aggregate summary, revenue comparison, cohorts, segments and experiment tools. Scripted offline tests exercise delegation. No live model success is claimed. |
 | Amazon: practical AI innovation | Pages 14-15 emphasize practical usefulness, adaptive agentic behavior, implementation and UX. The packet permits varied stacks. | An investigator that gathers evidence, accepts owner constraints and returns a testable plan fits. AWS use is not listed as a prerequisite in the packet. |
 | Peri: forward deployed challenge | Pages 15-16 require consultation with an actual business or qualifying student organization, its name, the consulted person's name and role, and supporting evidence. | Strong potential fit, but no such consultation is supplied for this fork. A fictional cafe or generic playtest does not satisfy this condition. |
 | Capital One: best usage of Nessie | Page 18 asks for creative endpoint use to improve financial lives. | An optional read-only merchant importer now converts explicitly scoped Nessie sandbox purchases and refunds into synthetic owner datasets. Offline tests cover the adapter and preview/save/select workflow; no credentialed live capture or real POS integration is verified. |
@@ -34,9 +34,9 @@ The merchant_ai module reads only explicitly injected environment variables; it 
 - OWNER_AI_PROVIDER accepts gemini or nemotron.
 - The selected provider requires GEMINI_API_KEY or NVIDIA_API_KEY in the backend process.
 - Pinned model identifiers follow the existing project's configured provider choices: gemini-3.8-flash or nvidia/nemotron-3.5-lightning-30b-a3b.
-- The run receives only typed aggregate metrics, selected dates, coverage, segments, cohorts and daily totals. Customer rows, customer labels, business labels, arbitrary source descriptions and original definition text are omitted.
+- The run receives only typed aggregate metrics, selected dates, coverage, segments, cohorts and trend totals (daily through 90 days, seven-day buckets for longer windows). Customer rows, customer labels, business labels, arbitrary source descriptions and original definition text are omitted.
 - Known dataset customer IDs and labels typed into the question are replaced before sending. The remaining free-text question is sent to the selected provider; this is not a general-purpose personal-information scrubber.
-- An ephemeral Deep Agents advisor delegates to a compiled analyst. Only four deterministic tools are offered to that analyst. The main model receives only the delegation tool. Filesystem scaffold tools are hidden and rejected if invented, with an additional deny rule on the virtual filesystem.
+- An ephemeral Deep Agents advisor delegates to a compiled analyst. Five deterministic tools are offered to that analyst, including the same reconciled revenue-change evidence used by the dashboard. Comparisons are checked against the bound source revision and dates; comparison tools return no percentage for incomplete coverage or nonpositive baselines. Model prose still requires review against that evidence. The main model receives only the delegation tool. Filesystem scaffold tools are hidden and rejected if invented, with an additional deny rule on the virtual filesystem.
 - One shared ledger permits at most six model calls and eight total tool calls, including delegation. The selected model has a 900-token output cap per call; a 40-second whole-run timeout and bounded context/tool payloads apply. LangSmith tracing is explicitly disabled even if inherited process flags enable it.
 - Evidence, activity and completion status are returned separately. A failed or evidence-free answer is never marked answered. Provider error details are not returned.
 - Experiment planning calculates an offer-cost ceiling from explicit audience, offer and duration inputs. It does not predict uplift, assign customers, send messages or save a campaign.
@@ -54,3 +54,6 @@ The implemented optional merchant adapter paginates accounts and transactions, r
 The supplied packet says November 15 at 8:00 a.m.; the current [official Devpost schedule](https://hackprinceton-fall-26.devpost.com/details/dates) lists 8:30 a.m. EST. Work against the earlier time until organizers resolve the discrepancy.
 
 The [official Devpost page](https://hackprinceton-fall-26.devpost.com/) asks for a public GitHub repository created November 13-15, Discord usernames, and an in-person demonstration of at most two minutes; the video is optional. This local project has not been published or submitted by this work. Select one main track and only claim sponsor integrations and consultation evidence that can be demonstrated.
+
+
+For a concise real-business validation conversation, see [owner interview](OWNER_INTERVIEW.md). No consultation is implied by that preparation guide.

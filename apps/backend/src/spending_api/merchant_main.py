@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import re
 import secrets
 import sqlite3
 from datetime import date
@@ -9,14 +10,15 @@ from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Path as APIPath, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from spending_api import merchant_ai
 from spending_api.merchant import DEMO, Dataset, build_dashboard, csv_export, investigate
-from spending_api.merchant_compare import compare_periods
+from spending_api.merchant_compare import attach_comparison, compare_periods, describe_change
+from spending_api.merchant_customers import CustomerNotFound, CustomerRevisionMismatch, customer_detail
 from spending_api.merchant_import import DatasetStore, parse_csv
 from spending_api.merchant_experiments import plan_experiment
 
@@ -146,12 +148,14 @@ def create_app(*, dataset: Dataset = DEMO, token: str | None = None,
         except (OSError, sqlite3.Error, ValueError):
             raise HTTPException(503, "Selected dataset is unavailable; review local dataset storage") from None
 
-    def snapshot(start=None, end=None):
+    def snapshot(start=None, end=None, include_comparison=False):
         key, selected = active_dataset()
         try:
             start = _iso_day(start) if isinstance(start, str) else start
             end = _iso_day(end) if isinstance(end, str) else end
             result = build_dashboard(start, end, data=selected)
+            if include_comparison:
+                result = attach_comparison(result, selected)
         except (ValueError, OverflowError) as exc:
             raise HTTPException(422, "Dates cannot be analyzed" if isinstance(exc, OverflowError) else str(exc)) from None
         result["source"]["dataset_id"] = key
@@ -194,6 +198,27 @@ def create_app(*, dataset: Dataset = DEMO, token: str | None = None,
     def dashboard(start: str | None = None, end: str | None = None):
         return snapshot(start, end)
 
+    @app.get("/api/v1/owner/customers/{customer_id}", dependencies=[Depends(authorize)])
+    def customer_evidence(
+        customer_id: Annotated[str, APIPath(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")],
+        start: str | None = None,
+        end: str | None = None,
+        offset: Annotated[int, Query(ge=0, le=5000)] = 0,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        expected_revision: Annotated[str | None, Query(pattern=r"^[a-f0-9]{64}$")] = None,
+    ):
+        key, selected = active_dataset()
+        try:
+            result = customer_detail(selected, customer_id, _iso_day(start), _iso_day(end),
+                                     offset, limit, expected_revision=expected_revision)
+        except CustomerRevisionMismatch as exc:
+            raise HTTPException(409, str(exc)) from None
+        except CustomerNotFound as exc:
+            raise HTTPException(404, str(exc)) from None
+        except (ValueError, OverflowError) as exc:
+            raise HTTPException(422, "Dates cannot be analyzed" if isinstance(exc, OverflowError) else str(exc)) from None
+        result["source"]["dataset_id"] = key
+        return result
     @app.get("/api/v1/owner/compare", dependencies=[Depends(authorize)])
     def comparison(start: str | None = None, end: str | None = None):
         key, selected = active_dataset()
@@ -275,9 +300,14 @@ def create_app(*, dataset: Dataset = DEMO, token: str | None = None,
     @app.post("/api/v1/owner/ask", dependencies=[Depends(authorize)])
     async def ask(request: Request):
         question = await _body(request, OwnerQuestion, limit=8192)
-        current = await run_in_threadpool(snapshot, question.start, question.end)
+        current = await run_in_threadpool(snapshot, question.start, question.end, True)
         capability = merchant_ai.status()
         if not capability["enabled"]:
+            lower = question.question.casefold()
+            change_word = re.search(r"\b(change|changed|compare|compared|comparison|decline|declined|drop|dropped|fell|rise|rose|grew|growth|up|down)\b", lower)
+            change_subject = re.search(r"\b(revenue|sales|period|periods)\b", lower)
+            if 'what changed' in lower or (change_word and change_subject):
+                return describe_change(current)
             return investigate(question.question, current)
         if not expected_token:
             raise HTTPException(503, "Configure OWNER_API_TOKEN before enabling AI requests")

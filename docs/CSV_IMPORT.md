@@ -23,6 +23,6 @@ Refunds must occur on or after their linked order, and their combined value cann
 
 Uploads are limited to 750 KB, 5,000 records and 731 inclusive days of coverage, with dates between 2000-01-01 and 2100-12-31. Coverage defaults to the earliest and latest supplied record; it is not a claim that no sales are missing. The optional API coverage fields can explicitly cover a broader known interval, while still retaining the observation caveat.
 
-Preview first. Review the business name, counts, dates and synthetic/owner-supplied flag. Import commits only the exact previewed content and options, verified by a hash. Each import is an immutable dataset stored in SQLite in the isolated `owner-data` volume. An identical import is idempotent. Selecting a dataset changes the active workspace; it does not delete the demo or earlier imports.
+Preview first. Review the business name, counts, dates and synthetic/owner-supplied flag. The preview also shows gross purchases, refunds, net revenue, completed orders and excluded pending/cancelled orders, so you can reconcile the file before saving. Import commits only the exact previewed content and options, verified by a hash. Each import is an immutable dataset stored in SQLite in the isolated `owner-data` volume. An identical import is idempotent. Selecting a dataset changes the active workspace; it does not delete the demo or earlier imports.
 
 The dashboard, CSV export, comparison and investigator use the same selected dataset. The default demo remains available for returning to a credential-free walkthrough.

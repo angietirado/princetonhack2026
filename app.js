@@ -2,6 +2,7 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const state = { data: null, token: '', view: 'overview', sequence: 0, controller: null, askSequence: 0, askController: null, draft: null, comparisonSequence: 0, comparisonController: null, pilotSequence: 0, pilotController: null, pilotResult: null };
+  const customerState = { id: null, opener: null, sequence: 0, controller: null, busy: false, bound: null, nextOffset: null, total: null, events: [] };
   const colors = { champions: '#315b43', regulars: '#78966b', promising: '#b7c89e', slipping: '#bb8059', new: '#ddd9bd' };
   const labels = { champions: 'Champions', regulars: 'Regulars', promising: 'Promising', slipping: 'Slipping away', new: 'New faces' };
   const money = (value) => Number.isFinite(value) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value / 100) : '—';
@@ -15,10 +16,10 @@
   const authHeaders = () => state.token ? { Authorization: `Bearer ${state.token}` } : {};
   const periodQuery = () => { const query = new URLSearchParams(); if ($('start-date').value) query.set('start', $('start-date').value); if ($('end-date').value) query.set('end', $('end-date').value); return query.toString(); };
   const options = (extra = {}) => ({ cache: 'no-store', redirect: 'error', credentials: 'same-origin', ...extra, headers: { ...authHeaders(), ...(extra.headers || {}) } });
-  const resetAnswer = () => { state.askSequence++; state.askController?.abort(); $('ask-result').hidden = true; setText('answer', ''); $('evidence').replaceChildren(); $('answer-limitations').replaceChildren(); setText('answer-meta', ''); $('answer-activity').replaceChildren(); $('answer-activity-details').hidden = true; $('answer-activity-details').open = false; $('ask-result').classList.remove('incomplete'); setText('ask-status', ''); $('ask-submit').disabled = false; };
-  const clearData = () => { resetAnalysis(); state.data = null; $('dashboard-content').hidden = true; resetAnswer(); $('draft-card').hidden = true; state.draft = null; $('draft-hypothesis').value = ''; $('draft-measure').value = ''; setText('draft-description', ''); };
+  const resetAnswer = () => { state.askSequence++; state.askController?.abort(); $('ask-result').hidden = true; setText('answer', ''); $('evidence').replaceChildren(); $('answer-limitations').replaceChildren(); $('answer-limits-details').open = false; setText('answer-source', ''); setText('answer-meta', ''); $('answer-activity').replaceChildren(); $('answer-activity-details').hidden = true; $('answer-activity-details').open = false; $('ask-result').classList.remove('incomplete'); setText('ask-status', ''); $('ask-submit').disabled = false; };
+  const clearData = (preserveSnapshot = false) => { resetAnalysis(); if (!preserveSnapshot) { state.data = null; $('dashboard-content').hidden = true; $('period-status').hidden = true; } resetAnswer(); $('draft-card').hidden = true; state.draft = null; $('draft-hypothesis').value = ''; $('draft-measure').value = ''; setText('draft-description', ''); };
   const unlockRequired = () => { state.token = ''; $('lock-button').hidden = true; clearData(); $('access-panel').hidden = false; status('This workspace requires an owner access token.'); $('access-token').focus(); };
-  const fetchJson = async (url, extra = {}) => { const response = await fetch(url, options(extra)); if (response.status === 401) { const error = new Error('Owner access token required.'); error.auth = true; throw error; } if (!response.ok) { let detail = ''; try { const body = await response.json(); if (typeof body.detail === 'string') detail = body.detail; } catch {} throw new Error(detail || `Request failed (${response.status}). Please try again.`); } return response.json(); };
+  const fetchJson = async (url, extra = {}) => { const response = await fetch(url, options(extra)); if (response.status === 401) { const error = new Error('Owner access token required.'); error.auth = true; throw error; } if (!response.ok) { let detail = ''; try { const body = await response.json(); if (typeof body.detail === 'string') detail = body.detail; } catch {} const error = new Error(detail || `Request failed (${response.status}). Please try again.`); error.status = response.status; throw error; } return response.json(); };
 
   function switchView(view) {
     const views = { overview: ['Overview', 'YOUR CUSTOMER STORY', 'Good business starts\nwith familiar faces.', 'See who returns, what matters, and where to put your energy.'], customers: ['Customers', 'KNOW YOUR PEOPLE', 'From first visits\nto familiar faces.', 'Explore the purchase patterns behind your customer relationships.'], experiments: ['Experiments', 'A THOUGHTFUL NEXT STEP', 'Turn a little insight\ninto a little progress.', 'Choose one idea, define success, and learn before doing more.'] };
@@ -72,13 +73,92 @@
     if ([...$('segment-filter').options].some((option) => option.value === previous)) $('segment-filter').value = previous;
   }
 
+  function clearCustomerEvidence() {
+    $('customer-evidence-content').hidden = true; $('customer-load-more').hidden = true; $('customer-evidence-refresh').hidden = true;
+    ['customer-history-metrics', 'customer-period-metrics', 'customer-events', 'customer-evidence-limitations'].forEach((id) => $(id).replaceChildren());
+    ['customer-evidence-group', 'customer-evidence-cutoff', 'customer-evidence-rule', 'customer-evidence-scope', 'customer-history-dates', 'customer-period-dates', 'customer-event-count', 'customer-evidence-source'].forEach((id) => setText(id, ''));
+    customerState.events = []; customerState.nextOffset = null; customerState.total = null;
+  }
+  function closeCustomerDrawer(restoreFocus = true) {
+    const opener = customerState.opener, wasOpen = !$('customer-drawer').hidden;
+    customerState.sequence++; customerState.controller?.abort(); customerState.busy = false; customerState.id = null; customerState.bound = null; customerState.opener = null;
+    clearCustomerEvidence(); $('customer-drawer').hidden = true; $('customer-drawer-backdrop').hidden = true; $('customer-drawer').setAttribute('aria-busy', 'false'); setText('customer-evidence-title', 'Customer evidence'); setText('customer-evidence-status', '');
+    if ($('data-drawer').hidden) { $('main').removeAttribute('inert'); document.querySelector('.sidebar').removeAttribute('inert'); }
+    if (restoreFocus && wasOpen) { if (opener?.isConnected) opener.focus(); else $('customer-search').focus(); }
+  }
+  function openCustomerDrawer(id, opener) {
+    if (!state.data) return;
+    closeCustomerDrawer(false); customerState.id = id; customerState.opener = opener;
+    customerState.bound = { dataSequence: state.sequence, revision: state.data.source.revision, dataset_id: state.data.source.dataset_id, period: { ...state.data.period } };
+    $('customer-drawer').hidden = false; $('customer-drawer-backdrop').hidden = false; $('main').setAttribute('inert', ''); document.querySelector('.sidebar').setAttribute('inert', '');
+    setText('customer-evidence-title', state.data.customers.find((customer) => customer.id === id)?.label || id); $('close-customer-drawer').focus(); loadCustomerPage(0);
+  }
+  function customerMetrics(target, metrics) {
+    $(target).replaceChildren(); [['Completed purchases', integer(metrics.orders)], ['Gross purchases', money(metrics.gross_revenue_cents)], ['Refunds deducted', `−${money(metrics.refund_cents)}`], ['Net revenue', money(metrics.net_revenue_cents)]].forEach(([label, value]) => { $(target).append(element('dt', '', label), element('dd', '', value)); });
+  }
+  function renderCustomerSummary(result) {
+    setText('customer-evidence-title', result.customer.label || result.customer.id); setText('customer-evidence-group', result.segment.label); setText('customer-evidence-cutoff', `Observed through ${result.segment.as_of} · UTC`); setText('customer-evidence-rule', result.segment.description);
+    setText('customer-evidence-scope', `This group uses all ${integer(result.observed_history.orders)} observed completed purchases through ${result.segment.as_of}. The table's ${integer(result.period_metrics.orders)} purchases and net revenue cover only ${result.period.start} to ${result.period.end}. A customer can qualify as a regular even with fewer purchases in the selected period.`);
+    setText('customer-history-dates', `First seen ${result.observed_history.first_seen} · Last seen ${result.observed_history.last_seen}`); setText('customer-period-dates', `${result.period.start} to ${result.period.end} · UTC`);
+    customerMetrics('customer-history-metrics', result.observed_history); customerMetrics('customer-period-metrics', result.period_metrics);
+    setText('customer-evidence-source', `${result.source.label} · ${result.source.synthetic ? 'Synthetic records' : 'Owner-provided records'}`); $('customer-evidence-limitations').replaceChildren(); (result.source.limitations || []).forEach((note) => $('customer-evidence-limitations').append(element('li', '', note)));
+  }
+  function customerSourceError() { const error = new Error('The dataset or observation window changed. Close this panel and refresh the workspace before reviewing this customer.'); error.staleSource = true; return error; }
+  function validateCustomerPage(result, offset) {
+    const bound = customerState.bound, pagination = result.pagination;
+    if (!state.data || !bound || !result.source?.revision || result.source.revision !== bound.revision || result.source.dataset_id !== bound.dataset_id || result.source.revision !== state.data.source.revision || result.source.dataset_id !== state.data.source.dataset_id || !samePeriod(result.period, bound.period) || !samePeriod(result.period, state.data.period) || result.customer?.id !== customerState.id) throw customerSourceError();
+    if (!result.segment || !result.observed_history || !result.period_metrics || !Array.isArray(result.events) || !pagination || pagination.offset !== offset || pagination.limit !== 50 || !Number.isSafeInteger(pagination.total) || pagination.total < 0 || result.events.length > 50) throw new Error('The customer evidence page is incomplete. Close this panel and try again.');
+    if ((customerState.total !== null && customerState.total !== pagination.total) || offset !== customerState.events.length) throw customerSourceError();
+    const ending = offset + result.events.length;
+    if (ending > pagination.total || (pagination.next_offset === null ? ending !== pagination.total : pagination.next_offset !== ending || ending >= pagination.total || !result.events.length)) throw new Error('The customer evidence pagination is inconsistent. Refresh the workspace and try again.');
+    const seen = new Set(customerState.events.map((event) => `${event.kind}:${event.id}`)); let previousDate = customerState.events.at(-1)?.date;
+    for (const event of result.events) {
+      if (!['purchase', 'refund'].includes(event.kind) || typeof event.id !== 'string' || typeof event.order_id !== 'string' || !Number.isSafeInteger(event.amount_cents) || event.amount_cents < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(event.date) || event.date > result.segment.as_of || typeof event.within_period !== 'boolean') throw new Error('The customer timeline contains an invalid record. Refresh the workspace and try again.');
+      if (event.within_period !== (event.date >= result.period.start && event.date <= result.period.end) || seen.has(`${event.kind}:${event.id}`) || (previousDate && event.date > previousDate)) throw new Error('The customer timeline changed while paging. Refresh the workspace and try again.');
+      seen.add(`${event.kind}:${event.id}`); previousDate = event.date;
+    }
+  }
+  function appendCustomerEvents(events) {
+    events.forEach((event) => {
+      const row = element('li', `customer-event ${event.kind}`); row.dataset.eventId = `${event.kind}:${event.id}`;
+      const icon = element('span', 'customer-event-icon', event.kind === 'refund' ? '↩' : '+'); icon.setAttribute('aria-hidden', 'true');
+      const detail = element('div'); detail.append(element('div', 'customer-event-title', event.kind === 'refund' ? 'Refund recorded' : 'Completed purchase'), element('div', 'customer-event-meta', `${event.date} · ${event.kind === 'refund' ? `Refund ${event.id} · Original order ${event.order_id}` : `Order ${event.order_id}`}`), element('span', `customer-event-period${event.within_period ? '' : ' outside'}`, event.within_period ? 'In selected period' : 'Outside selected period'));
+      row.append(icon, detail, element('div', 'customer-event-amount', `${event.kind === 'refund' ? '−' : '+'}${money(event.amount_cents)}`)); $('customer-events').append(row);
+    });
+  }
+  async function loadCustomerPage(offset) {
+    if (customerState.busy || !customerState.id || !customerState.bound) return;
+    if (document.activeElement === $('customer-load-more')) $('customer-event-count').focus();
+    const sequence = customerState.sequence, bound = customerState.bound; customerState.busy = true; customerState.controller = new AbortController(); $('customer-drawer').setAttribute('aria-busy', 'true'); $('customer-load-more').disabled = true; $('customer-evidence-status').classList.remove('error'); setText('customer-evidence-status', offset ? 'Loading earlier records…' : 'Reading the purchases behind this customer group…');
+    try {
+      const query = new URLSearchParams({ ...bound.period, offset: String(offset), limit: '50', expected_revision: bound.revision });
+      const result = await fetchJson(`/api/v1/owner/customers/${encodeURIComponent(customerState.id)}?${query}`, { signal: customerState.controller.signal });
+      if (sequence !== customerState.sequence || bound.dataSequence !== state.sequence || $('customer-drawer').hidden) return;
+      validateCustomerPage(result, offset); if (!offset) renderCustomerSummary(result); appendCustomerEvents(result.events);
+      customerState.events.push(...result.events); customerState.nextOffset = result.pagination.next_offset; customerState.total = result.pagination.total;
+      setText('customer-event-count', `${integer(customerState.events.length)} of ${integer(customerState.total)} observed records shown`); $('customer-load-more').hidden = customerState.nextOffset === null; $('customer-events-empty').hidden = customerState.total > 0; $('customer-evidence-content').hidden = false; setText('customer-evidence-status', '');
+    } catch (error) {
+      if (sequence !== customerState.sequence || bound.dataSequence !== state.sequence || error.name === 'AbortError') return;
+      if (error.auth) { closeCustomerDrawer(false); unlockRequired(); }
+      else if (error.status === 409 || error.staleSource) { const needsFocus = $('customer-evidence-content').contains(document.activeElement); clearCustomerEvidence(); setText('customer-evidence-status', 'The dataset changed. Refresh the workspace before reviewing this customer; no mismatched evidence is shown.'); $('customer-evidence-refresh').hidden = false; $('customer-evidence-status').classList.add('error'); if (needsFocus) $('customer-evidence-refresh').focus(); }
+      else { setText('customer-evidence-status', error.message || 'Could not load customer evidence. Close this panel and try again.'); $('customer-evidence-status').classList.add('error'); }
+    } finally { if (sequence === customerState.sequence) { customerState.busy = false; $('customer-drawer').setAttribute('aria-busy', 'false'); $('customer-load-more').disabled = false; } }
+  }
+  $('close-customer-drawer').addEventListener('click', () => closeCustomerDrawer()); $('customer-drawer-backdrop').addEventListener('click', () => closeCustomerDrawer());
+  $('customer-load-more').addEventListener('click', () => { if (customerState.nextOffset !== null) loadCustomerPage(customerState.nextOffset); });
+  $('customer-evidence-refresh').addEventListener('click', () => { closeCustomerDrawer(false); load(); });
+  $('customer-drawer').addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); closeCustomerDrawer(); }
+    if (event.key === 'Tab') { const focusable = [...$('customer-drawer').querySelectorAll('button, summary, [tabindex]')].filter((node) => !node.disabled && node.tabIndex >= 0 && !node.closest('[hidden]')); const first = focusable[0], last = focusable.at(-1); if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } }
+  });
+
   function renderCustomers() {
     $('customers').replaceChildren();
     if (!state.data) return;
     const search = $('customer-search').value.trim().toLowerCase(), segment = $('segment-filter').value;
     const rows = state.data.customers.filter((customer) => (segment === 'all' || customer.segment === segment) && `${customer.id} ${customer.label}`.toLowerCase().includes(search));
     rows.forEach((customer) => {
-      const row = element('tr'); row.append(element('td', '', customer.label || customer.id));
+      const row = element('tr'); const identity = element('td'); const customerButton = element('button', 'customer-link', customer.label || customer.id); customerButton.type = 'button'; customerButton.dataset.customerId = customer.id; customerButton.setAttribute('aria-haspopup', 'dialog'); customerButton.setAttribute('aria-controls', 'customer-drawer'); customerButton.setAttribute('aria-label', `View purchase history for ${customer.label || customer.id}`); customerButton.addEventListener('click', () => openCustomerDrawer(customer.id, customerButton)); identity.append(customerButton); row.append(identity);
       const group = element('td'); const badge = element('span', 'segment-badge'); const dot = element('span', 'segment-dot'); dot.style.background = colors[customer.segment] || '#a7b598'; badge.append(dot, document.createTextNode(state.data.segments.find((s) => s.id === customer.segment)?.label || labels[customer.segment] || customer.segment)); group.append(badge); row.append(group);
       row.append(element('td', '', integer(customer.orders)), element('td', '', money(customer.revenue_cents)), element('td', '', shortDate(customer.last_seen)), element('td', '', integer(customer.days_since_last)));
       $('customers').append(row);
@@ -149,17 +229,27 @@
     setText('source-label', data.source.label); setText('coverage-label', `Observed ${data.source.coverage_start} – ${data.source.coverage_end} · UTC`);
     setText('date-caption', `Customer groups as of ${cutoff} · UTC`);
     $('dashboard-content').hidden = false; $('access-panel').hidden = true; $('lock-button').hidden = !state.token;
-    status('');
+    updatePeriodStatus(); status('');
   }
 
+  function updatePeriodStatus(loading = false) {
+    const changed = state.data && ($('start-date').value !== state.data.period.start || $('end-date').value !== state.data.period.end);
+    $('period-status').hidden = !changed;
+    if (changed) setText('period-status', `${loading ? 'Applying requested dates.' : 'Date edits are not applied yet.'} The workspace and questions still use ${state.data.period.start} to ${state.data.period.end} (UTC).${loading ? '' : ' Apply the date range to update them.'}`);
+  }
+  function datesEdited() {
+    state.controller?.abort(); state.controller = null; state.sequence++;
+    resetAnalysis(); resetAnswer(); $('refresh').disabled = false; updatePeriodStatus();
+    status(state.data ? '' : 'Dates changed. Apply the date range to load customer data.');
+  }
   async function load() {
     const start = $('start-date').value, end = $('end-date').value;
     if (start && end && start > end) { status('Choose an end date on or after the start date.', true); return; }
-    state.controller?.abort(); state.controller = new AbortController(); const sequence = ++state.sequence;
-    clearData(); $('access-panel').hidden = true; $('refresh').disabled = true; status('Reading your customer story…');
-    try { const query = periodQuery(); const data = await fetchJson(`/api/v1/owner/dashboard${query ? `?${query}` : ''}`, { signal: state.controller.signal }); if (sequence !== state.sequence) return; render(data); }
+    state.controller?.abort(); const controller = new AbortController(); state.controller = controller; const sequence = ++state.sequence;
+    clearData(true); $('access-panel').hidden = true; $('refresh').disabled = true; updatePeriodStatus(true); status('Reading your customer story…');
+    try { const query = periodQuery(); const data = await fetchJson(`/api/v1/owner/dashboard${query ? `?${query}` : ''}`, { signal: controller.signal }); if (sequence !== state.sequence) return; render(data); state.sequence++; resetAnalysis(); resetAnswer(); }
     catch (error) { if (sequence !== state.sequence || error.name === 'AbortError') return; clearData(); if (error.auth) unlockRequired(); else status(error.message || 'Could not load customer data. Please try again.', true); }
-    finally { if (sequence === state.sequence) $('refresh').disabled = false; }
+    finally { if (state.controller === controller) { state.controller = null; $('refresh').disabled = false; } }
   }
 
   function evidenceText(value) {
@@ -168,6 +258,70 @@
     if (Array.isArray(value)) return value.map(evidenceText).join('\n');
     if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${titleCase(key)}: ${key.endsWith('_cents') && Number.isFinite(item) ? money(item) : evidenceText(item)}`).join(' · ');
     return String(value);
+  }
+
+  const evidenceMetricLabels = { net_revenue_cents: 'Net revenue', gross_revenue_cents: 'Gross purchases', refund_cents: 'Refunds recorded', order_count: 'Completed purchases', orders: 'Completed purchases', active_customers: 'Active customers', customers: 'Observed customers', returning_customers: 'Customers observed before this period', within_period_repeat_customers: 'Customers who bought twice in this period', within_period_repeat_share: 'Bought twice in this period', returning_share: 'Previously observed customer share', gross_average_order_cents: 'Average purchase before refunds', average_order_cents: 'Net revenue per completed purchase' };
+  const evidenceGroupLabels = { first_observed: 'First observed this period', returned: 'Returned after a quiet period', continued: 'Bought in both periods', went_quiet: 'Bought earlier, no purchase now', refund_only: 'Refunds without period purchases' };
+  const evidencePercent = (value) => Number.isFinite(value) ? new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(value) : 'Unavailable';
+  const evidenceDates = (period) => period?.start && period?.end ? `${period.start} to ${period.end} · UTC` : 'Selected observation window';
+  function evidenceMetricValue(key, value) { if (value === null || value === undefined) return 'Unavailable'; if (key.endsWith('_cents')) return money(value); if (key.endsWith('_share') || key.endsWith('_fraction')) return evidencePercent(value); return Number.isFinite(value) ? integer(value) : String(value); }
+  function evidenceStats(host, rows) { const grid = element('div', 'evidence-stats'); rows.forEach(([label, value, note]) => { const stat = element('div', 'evidence-stat'); stat.append(element('span', '', label), element('strong', '', value)); if (note) stat.append(element('small', '', note)); grid.append(stat); }); host.append(grid); }
+  function evidenceTable(host, headings, rows, caption) { const scroller = element('div', 'table-scroll'); const table = element('table', 'evidence-table'); if (caption) table.append(element('caption', '', caption)); const head = element('thead'), header = element('tr'); headings.forEach((heading) => { const cell = element('th', '', heading); cell.scope = 'col'; header.append(cell); }); head.append(header); table.append(head); const body = element('tbody'); rows.forEach((values) => { const row = element('tr'); values.forEach((value) => row.append(element('td', '', value))); body.append(row); }); table.append(body); scroller.append(table); host.append(scroller); }
+  function evidenceComparison(host, value) {
+    host.append(element('h3', '', 'Observed revenue change'));
+    if (value.available === false || !value.baseline?.metrics || !value.current?.metrics) { host.append(element('p', 'evidence-note warning', value.limitations?.[0] || 'A preceding-period comparison is unavailable for this observation window.')); return; }
+    const percentageAvailable = value.percentage_available !== false && value.fully_covered === true && Number.isFinite(value.change_fraction);
+    const changeNote = percentageAvailable ? `${value.change_fraction > 0 ? '+' : ''}${evidencePercent(value.change_fraction)} of earlier net revenue` : 'Percentage change unavailable';
+    evidenceStats(host, [['Earlier net revenue', money(value.baseline.metrics.net_revenue_cents), evidenceDates(value.baseline.period)], ['Current net revenue', money(value.current.metrics.net_revenue_cents), evidenceDates(value.current.period)], ['Observed difference', signedMoney(value.delta_cents), changeNote]]);
+    if (Array.isArray(value.groups)) evidenceTable(host, ['Customer pattern', 'Customers', 'Earlier', 'Current', 'Change'], value.groups.map((group) => [evidenceGroupLabels[group.id] || group.label || 'Other observed pattern', integer(group.customers), money(group.baseline_cents), money(group.current_cents), signedMoney(group.delta_cents)]), 'How customer groups contribute to the difference');
+    const coverageNote = value.fully_covered ? `${integer(value.days_per_period)} days in each window, within supplied history. These contributions explain the arithmetic, not what caused behavior to change.` : 'At least one window extends beyond supplied history. Empty dates are unknown; percentages and rate comparisons are unavailable.';
+    host.append(element('p', `evidence-note${value.fully_covered ? '' : ' warning'}`, coverageNote));
+    if (value.fully_covered && !percentageAvailable) host.append(element('p', 'evidence-note warning', 'Percentage change is unavailable because earlier net revenue is zero or negative.'));
+  }
+  function evidenceSummary(host, value) {
+    const metrics = value.metrics || value; host.append(element('h3', '', 'Observed business totals')); if (value.period) host.append(element('p', 'evidence-period', evidenceDates(value.period)));
+    const keys = ['net_revenue_cents', 'order_count', 'active_customers', 'gross_revenue_cents', 'refund_cents', 'gross_average_order_cents', 'within_period_repeat_customers', 'within_period_repeat_share', 'returning_customers'];
+    const rows = keys.filter((key) => Object.hasOwn(metrics, key)).map((key) => [evidenceMetricLabels[key], evidenceMetricValue(key, metrics[key])]);
+    if (Object.hasOwn(metrics, 'customers')) rows.push(['Observed customers', integer(metrics.customers)]);
+    evidenceStats(host, rows); if (value.source?.period_within_coverage === false) host.append(element('p', 'evidence-note warning', 'Some selected dates are outside supplied coverage. Empty dates remain unknown.'));
+  }
+  function evidenceSegments(host, rows, value) {
+    host.append(element('h3', '', rows.length === 1 ? `${rows[0].label || labels[rows[0].segment || rows[0].id] || 'Observed'} customer group` : 'Observed customer groups'));
+    evidenceTable(host, ['Customer group', 'Customers', 'Selected-period net revenue'], rows.map((row) => [row.label || labels[row.segment || row.id] || 'Observed group', integer(row.customers), money(row.revenue_cents)]));
+    const cutoff = value.source?.segment_as_of || state.data?.source.segment_as_of;
+    host.append(element('p', 'evidence-note', `${cutoff ? `Groups use purchase history through ${cutoff}. ` : ''}Revenue uses only the selected period. These are purchase-pattern rules, not churn predictions.`));
+    if (rows.length === 1 && rows[0].description) host.append(element('p', 'evidence-note', rows[0].description));
+  }
+  function evidenceCohorts(host, rows) {
+    host.append(element('h3', '', 'Do observed customers come back?'));
+    const shown = rows.slice(-4); evidenceTable(host, ['First observed', 'Customers', 'Month 0', 'Month 1', 'Month 2', 'Month 3'], shown.map((cohort) => [cohort.month, integer(cohort.customers), ...Array.from({ length: 4 }, (_, index) => cohort.retention?.[index] === null || cohort.retention?.[index] === undefined ? '—' : evidencePercent(cohort.retention[index]))]));
+    host.append(element('p', 'evidence-note', `${rows.length > 4 ? `Showing the latest 4 of ${integer(rows.length)} cohorts. ` : ''}Each percentage is the share with a completed purchase in that cohort month. “—” means not yet observable, not zero; month 0 is the starting group.`));
+  }
+  function evidencePlan(host, value) {
+    host.append(element('h3', '', 'An illustrative customer pilot')); host.append(element('p', 'evidence-period', `${labels[value.segment] || 'Selected customer group'} · ${integer(value.window_days)} evaluation days`));
+    evidenceStats(host, [['Offer group', integer(value.treatment_customers), 'Proposed customers'], ['Holdout group', integer(value.holdout_customers), 'Proposed customers'], ['Maximum offer cost', money(value.maximum_offer_cost_cents), `${money(value.offer_cents)} per offer`]]);
+    host.append(element('p', `evidence-note${value.within_budget === false || value.feasible_pilot === false ? ' warning' : ''}`, value.within_budget === false ? `This exceeds the entered ${money(value.budget_cents)} offer budget. Revise the assumptions before considering a pilot.` : value.feasible_pilot === false ? 'The observed audience is too small for this illustrative split.' : `${value.budget_cents === null ? 'No offer budget was supplied.' : `Fits the entered ${money(value.budget_cents)} offer budget.`} This does not establish effectiveness or statistical power.`));
+    host.append(element('p', 'evidence-note', 'Draft only: nobody is assigned or contacted. Maximum offer cost excludes delivery, labor, product, and setup costs.'));
+  }
+  function renderEvidence(item) {
+    const card = element('article', 'evidence-item evidence-card'), primary = element('div', 'evidence-primary'); card.append(primary);
+    const tool = item && typeof item === 'object' ? item.tool : null;
+    const value = tool && item.result && typeof item.result === 'object' ? item.result : item;
+    if (typeof value === 'string') primary.append(element('p', '', value));
+    else if (value && typeof value === 'object') {
+      if (tool === 'owner_revenue_change' || (Object.hasOwn(value, 'available') && (value.baseline || value.reason)) || (value.baseline && value.current && Array.isArray(value.groups))) evidenceComparison(primary, value);
+      else if (Object.hasOwn(value, 'metric') && Object.hasOwn(value, 'value')) evidenceStats(primary, [[evidenceMetricLabels[value.metric] || titleCase(String(value.metric).replace(/_cents$/, '')), evidenceMetricValue(String(value.metric), value.value)]]);
+      else if (tool === 'plan_owner_experiment' || Object.hasOwn(value, 'maximum_offer_cost_cents')) evidencePlan(primary, value);
+      else if (Array.isArray(value.segments)) evidenceSegments(primary, value.segments, value);
+      else if (Array.isArray(value.cohorts)) evidenceCohorts(primary, value.cohorts);
+      else if (value.month && Array.isArray(value.retention)) evidenceCohorts(primary, [value]);
+      else if ((labels[value.id] || labels[value.segment]) && Object.hasOwn(value, 'customers') && Object.hasOwn(value, 'revenue_cents')) evidenceSegments(primary, [value], value);
+      else if (value.title && value.reason) { primary.append(element('h3', '', value.title), element('p', '', value.reason)); if (value.customers !== undefined) primary.append(element('p', 'evidence-note', `${integer(value.customers)} observed customers in this audience.`)); if (value.suggestion) primary.append(element('p', 'evidence-note', value.suggestion)); }
+      else if (value.metrics || ['net_revenue_cents', 'gross_revenue_cents', 'order_count', 'customers'].some((key) => Object.hasOwn(value, key))) evidenceSummary(primary, value);
+      else { primary.append(element('h3', '', 'Recorded calculation'), element('p', 'evidence-note', 'Open calculation details to inspect the full recorded result.')); }
+    } else primary.append(element('p', '', String(value ?? 'No evidence returned.')));
+    if (item && typeof item === 'object') { const details = element('details', 'evidence-details'); details.append(element('summary', '', 'Calculation details'), element('pre', '', JSON.stringify(item, null, 2))); card.append(details); }
+    return card;
   }
 
   async function ask(event) {
@@ -179,8 +333,11 @@
       if (typeof result.answer !== 'string') throw new Error('The investigation returned no answer. Please try again.');
       setText('answer', result.answer); $('evidence').replaceChildren();
       const evidence = Array.isArray(result.evidence) ? result.evidence : result.evidence ? [result.evidence] : [];
-      evidence.forEach((item) => $('evidence').append(element('div', 'evidence-item', evidenceText(item))));
-      $('answer-limitations').replaceChildren(); (result.limitations || []).forEach((item) => $('answer-limitations').append(element('li', '', item)));
+      evidence.forEach((item) => $('evidence').append(renderEvidence(item)));
+      const limitations = [...new Set((result.limitations || []).filter((item) => typeof item === 'string'))];
+      $('answer-limitations').replaceChildren(); limitations.forEach((item) => $('answer-limitations').append(element('li', '', item)));
+      setText('answer-source', `${result.source.label || 'Observed customer records'} · ${result.source.synthetic ? 'Synthetic data' : 'Owner-provided data'} · ${evidenceDates(result.period)}`);
+      setText('answer-limits-summary', `Sources and limits${limitations.length ? ` (${limitations.length})` : ''}`); $('answer-limits-details').open = false;
       const isModel = ['gemini', 'nemotron'].includes(result.provider), completed = result.status === 'answered';
       const providerLabel = { deterministic: 'Offline calculation', gemini: 'Gemini', nemotron: 'NVIDIA Nemotron' }[result.provider] || 'Unknown provider';
       const resultLabel = { answered: 'Answered', limited: 'Resource limit reached', unavailable: 'Unavailable', clarification: 'Clarification needed' }[result.status] || 'Incomplete response';
@@ -202,7 +359,7 @@
 
   function resetComparison() { state.comparisonSequence++; state.comparisonController?.abort(); $('comparison-result').hidden = true; $('comparison-totals').replaceChildren(); $('comparison-groups').replaceChildren(); $('comparison-contributors').replaceChildren(); $('comparison-limitations').replaceChildren(); $('comparison-contributor-details').open = false; setText('comparison-status', ''); $('compare-button').disabled = false; }
   function resetPilot() { state.pilotResult = null; state.pilotSequence++; state.pilotController?.abort(); $('pilot-result').hidden = true; $('pilot-numbers').replaceChildren(); $('pilot-limitations').replaceChildren(); setText('pilot-status', ''); $('pilot-submit').disabled = false; }
-  function resetAnalysis() { resetComparison(); resetPilot(); }
+  function resetAnalysis() { resetComparison(); resetPilot(); closeCustomerDrawer(false); }
   const samePeriod = (a, b) => a?.start === b?.start && a?.end === b?.end;
   const signedMoney = (value) => `${value > 0 ? '+' : ''}${money(value)}`;
   function renderComparison(result) {
@@ -246,7 +403,7 @@
   }
   $('compare-button').addEventListener('click', explainChange); $('pilot-form').addEventListener('submit', calculatePilot);
   ['pilot-segment', 'pilot-audience', 'pilot-offer', 'pilot-budget', 'pilot-days'].forEach((id) => { $(id).addEventListener('input', resetPilot); $(id).addEventListener('change', resetPilot); });
-  ['start-date', 'end-date'].forEach((id) => { $(id).addEventListener('input', resetAnalysis); $(id).addEventListener('change', resetAnalysis); });
+  ['start-date', 'end-date'].forEach((id) => { $(id).addEventListener('input', datesEdited); $(id).addEventListener('change', datesEdited); });
 
   const importState = { sequence: 0, preview: null, reviewed: null, busy: false, canImport: false };
   const importStatus = (message) => setText('data-source-status', message);
@@ -255,17 +412,18 @@
   function closeDataDrawer() { if (importState.busy) return; $('data-drawer').hidden = true; $('data-drawer-backdrop').hidden = true; $('main').removeAttribute('inert'); document.querySelector('.sidebar').removeAttribute('inert'); $('data-source-button').focus(); }
   async function refreshDatasets() { const result = await fetchJson('/api/v1/owner/datasets'); $('dataset-select').replaceChildren(); result.datasets.forEach((dataset) => { const option = element('option', '', `${dataset.business_name} · ${dataset.synthetic ? 'Synthetic demo' : 'Imported data'}`); option.value = dataset.id; $('dataset-select').append(option); }); $('dataset-select').value = result.active_id; }
   async function openDataDrawer() {
+    closeCustomerDrawer(false);
     $('data-drawer').hidden = false; $('data-drawer-backdrop').hidden = false; $('main').setAttribute('inert', ''); document.querySelector('.sidebar').setAttribute('inert', ''); $('close-data-drawer').focus(); importStatus('Checking available datasets…');
     try { const capability = await fetchJson('/api/v1/owner/status'); importState.canImport = capability.can_import === true; setImportBusy(false); await refreshDatasets(); if (!$('data-drawer').hidden) importStatus(importState.canImport ? '' : 'This workspace is read-only. Dataset import and switching are unavailable.'); }
     catch (error) { if (error.auth) { closeDataDrawer(); unlockRequired(); } else importStatus(error.message || 'Could not load datasets.'); }
   }
   function csvBody() { const csv = $('import-csv').value, business_name = $('import-business').value.trim(); if (!business_name) throw new Error('Enter a business name before previewing.'); if (!csv.trim()) throw new Error('Choose a CSV file or paste its contents.'); if (new Blob([csv]).size > 750000) throw new Error('The CSV exceeds the 750 KB limit.'); return { csv, business_name, synthetic: $('import-synthetic').checked }; }
-  function renderImportPreview(preview) { if (!/^[a-f0-9]{64}$/.test(preview.preview_hash || '')) throw new Error('The import preview is incomplete. Please try again.'); $('import-summary').replaceChildren(); const rows = { Business: preview.business_name || importState.reviewed.business_name, Orders: integer(preview.orders), Refunds: integer(preview.refunds), Customers: integer(preview.customers), 'First record': preview.coverage_start, 'Last record': preview.coverage_end, 'Source label': preview.synthetic ? 'Synthetic or test data' : 'Owner-provided data' }; Object.entries(rows).forEach(([label, value]) => { $('import-summary').append(element('dt', '', label), element('dd', '', value)); }); $('import-warnings').replaceChildren(); (preview.warnings || []).forEach((warning) => $('import-warnings').append(element('li', '', warning))); $('import-preview').hidden = false; }
+  function renderImportPreview(preview) { if (!/^[a-f0-9]{64}$/.test(preview.preview_hash || '')) throw new Error('The import preview is incomplete. Please try again.'); $('import-summary').replaceChildren(); const rows = { Business: preview.business_name || importState.reviewed.business_name, 'Order rows': integer(preview.orders), 'Completed purchases': integer(preview.completed_orders), 'Excluded orders (pending / cancelled)': `${integer(preview.excluded_orders)} (${integer(preview.pending_orders)} / ${integer(preview.cancelled_orders)})`, 'Refund records': integer(preview.refunds), 'Identified buyers': integer(preview.customers), 'Gross purchases': money(preview.gross_revenue_cents), 'Refunds deducted': `−${money(preview.refund_cents)}`, 'Net revenue': money(preview.net_revenue_cents), 'First record': preview.coverage_start, 'Last record': preview.coverage_end, 'Source label': preview.synthetic ? 'Synthetic or test data' : 'Owner-provided data' }; Object.entries(rows).forEach(([label, value]) => { $('import-summary').append(element('dt', '', label), element('dd', '', value)); }); $('import-warnings').replaceChildren(); (preview.warnings || []).forEach((warning) => $('import-warnings').append(element('li', '', warning))); $('import-preview').hidden = false; }
   async function previewImport(event) { event.preventDefault(); if (importState.busy || !importState.canImport) return; invalidatePreview(); const sequence = importState.sequence; try { const body = csvBody(); setImportBusy(true); importStatus('Validating the complete CSV…'); const preview = await fetchJson('/api/v1/owner/import/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (sequence !== importState.sequence) return; importState.preview = preview; importState.reviewed = body; renderImportPreview(preview); importStatus('Preview ready. Review the counts, dates, and limitations before importing.'); }
     catch (error) { if (sequence !== importState.sequence) return; if (error.auth) { setImportBusy(false); closeDataDrawer(); unlockRequired(); } else importStatus(error.message || 'The CSV could not be validated.'); } finally { setImportBusy(false); } }
-  async function commitImport() { if (importState.busy || !importState.canImport || !importState.preview || !importState.reviewed) return; try { const current = csvBody(); if (JSON.stringify(current) !== JSON.stringify(importState.reviewed)) { invalidatePreview(); throw new Error('The input changed. Preview it again before importing.'); } setImportBusy(true); importStatus('Saving the reviewed dataset…'); await fetchJson('/api/v1/owner/import/commit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...importState.reviewed, preview_hash: importState.preview.preview_hash }) }); invalidatePreview(); $('import-csv').value = ''; $('import-file').value = ''; $('start-date').value = ''; $('end-date').value = ''; $('customer-search').value = ''; await refreshDatasets(); await load(); importStatus('Imported successfully. The workspace now shows your separate reviewed dataset.'); }
+  async function commitImport() { if (importState.busy || !importState.canImport || !importState.preview || !importState.reviewed) return; try { const current = csvBody(); if (JSON.stringify(current) !== JSON.stringify(importState.reviewed)) { invalidatePreview(); throw new Error('The input changed. Preview it again before importing.'); } setImportBusy(true); importStatus('Saving the reviewed dataset…'); await fetchJson('/api/v1/owner/import/commit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...importState.reviewed, preview_hash: importState.preview.preview_hash }) }); invalidatePreview(); $('import-csv').value = ''; $('import-file').value = ''; $('start-date').value = ''; $('end-date').value = ''; $('customer-search').value = ''; clearData(); await refreshDatasets(); await load(); importStatus('Imported successfully. The workspace now shows your separate reviewed dataset.'); }
     catch (error) { if (error.auth) { setImportBusy(false); closeDataDrawer(); unlockRequired(); } else importStatus(`${error.message || 'Import could not be completed.'} Check the dataset list before retrying if the connection was interrupted.`); } finally { setImportBusy(false); } }
-  async function selectDataset() { if (importState.busy || !importState.canImport) return; try { setImportBusy(true); importStatus('Switching datasets…'); await fetchJson('/api/v1/owner/datasets/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataset_id: $('dataset-select').value }) }); invalidatePreview(); $('start-date').value = ''; $('end-date').value = ''; $('customer-search').value = ''; await load(); importStatus('Dataset switched. Dates now match its observed history.'); }
+  async function selectDataset() { if (importState.busy || !importState.canImport) return; try { setImportBusy(true); importStatus('Switching datasets…'); await fetchJson('/api/v1/owner/datasets/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataset_id: $('dataset-select').value }) }); invalidatePreview(); $('start-date').value = ''; $('end-date').value = ''; $('customer-search').value = ''; clearData(); await load(); importStatus('Dataset switched. Dates now match its observed history.'); }
     catch (error) { if (error.auth) { setImportBusy(false); closeDataDrawer(); unlockRequired(); } else importStatus(error.message || 'Dataset could not be switched.'); } finally { setImportBusy(false); } }
   $('data-source-button').addEventListener('click', openDataDrawer); $('close-data-drawer').addEventListener('click', closeDataDrawer); $('data-drawer-backdrop').addEventListener('click', closeDataDrawer);
   $('import-form').addEventListener('submit', previewImport); $('commit-import').addEventListener('click', commitImport); $('select-dataset').addEventListener('click', selectDataset);
@@ -273,7 +431,7 @@
   $('import-synthetic').addEventListener('change', () => { invalidatePreview(); importStatus('Source label changed. Preview again before saving.'); });
   $('import-file').addEventListener('change', async () => { invalidatePreview(); const sequence = importState.sequence; const file = $('import-file').files[0]; if (!file) return; if (file.size > 750000) { importStatus('The file exceeds the 750 KB limit. Choose a smaller sales export.'); return; } try { const text = typeof file.text === 'function' ? await file.text() : await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('File could not be read.')); reader.readAsText(file, 'UTF-8'); }); if (sequence !== importState.sequence) return; $('import-csv').value = text; importStatus('File loaded into the preview form. Review the business name, then preview the import.'); } catch { importStatus('This file could not be read as text. Try a UTF-8 CSV export.'); } });
   $('download-template').addEventListener('click', async () => { try { const response = await fetch('/api/v1/owner/import/template.csv', options()); if (response.status === 401) { closeDataDrawer(); unlockRequired(); return; } if (!response.ok) throw new Error('Template download failed.'); const url = URL.createObjectURL(await response.blob()); const link = element('a'); link.href = url; link.download = 'regulars-import-template.csv'; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); importStatus('CSV template downloaded. Replace the examples with your own pseudonymous records.'); } catch (error) { importStatus(error.message || 'Template download failed.'); } });
-  $('data-drawer').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); closeDataDrawer(); } if (event.key === 'Tab') { const focusable = [...$('data-drawer').querySelectorAll('button, input, select, textarea, [tabindex]')].filter((node) => !node.disabled && !node.closest('[hidden]')); const first = focusable[0], last = focusable.at(-1); if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } });
+  $('data-drawer').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); closeDataDrawer(); } if (event.key === 'Tab') { const focusable = [...$('data-drawer').querySelectorAll('button, input, select, textarea, [tabindex]')].filter((node) => !node.disabled && node.tabIndex >= 0 && !node.closest('[hidden]')); const first = focusable[0], last = focusable.at(-1); if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } });
 
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => switchView(button.dataset.view)));
   document.querySelectorAll('[data-question]').forEach((button) => button.addEventListener('click', () => { $('question').value = button.dataset.question; $('question').focus(); }));

@@ -25,7 +25,7 @@ Rebuild with the startup command after changes. Stop using `docker compose --env
 ## Owner workflow
 
 1. Inspect net sales, gross average purchase, active customers, and returning-customer share for an explicit UTC period. Within-period repeat buying is shown separately, so short imports do not confuse missing history with lost loyalty.
-2. Explore observed customer segments, purchase history, and cohort retention.
+2. Explore observed customer segments and cohort retention. Open a customer to inspect the purchase/refund evidence behind their group; [customer evidence](docs/CUSTOMER_EVIDENCE.md) explains the period and history views.
 3. Inspect suggested experiments and their supporting counts. Segment rules describe observed behavior; they are not churn predictions.
 4. Ask a focused question and inspect the calculated evidence. The default investigator works without external credentials.
 

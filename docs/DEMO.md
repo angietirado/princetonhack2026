@@ -1,26 +1,28 @@
-﻿# Two-minute demonstration draft
+# Two-minute demonstration draft
 
 This is a proposed script, not evidence of sponsor eligibility or real business validation.
 
-## 0:00–0:20 — The owner problem
-"An independent cafe owner knows familiar faces, but a sales total doesn't explain who is coming back. Regulars turns their own purchase records into a clear next question and a small experiment."
+## 0:00–0:15 — The owner problem
+"An independent cafe owner knows familiar faces, but a sales total does not explain who is coming back. Regulars helps the owner trace a change to observed purchases and decide what to test next."
 
-Show the fictional-data badge immediately. Explain that this is a reproducible demonstration until an owner supplies records.
+Show the fictional-data badge immediately. This reproducible cafe demonstration is not a real owner's dataset.
 
-## 0:20–0:50 — Observe
-Show net sales and returning share. Select Slipping to reveal previously frequent customers whose last observed purchase is over 30 days ago. Show the rule and explain that this is not a churn prediction. Show incomplete cohort cells as unavailable.
+## 0:15–0:45 — Trace a customer pattern
+Show net sales and returning share. Select Slipping: customers with at least two observed purchases and a gap over 30 days. Open one customer and point to the group rule, selected-period totals, and earlier purchase history. Explain that this is an observed pattern, not a churn prediction.
 
-## 0:50–1:20 — Investigate
-Ask which customers should receive attention. Show the numeric evidence rather than reading prose alone. With configured AI, show actual tool/delegation activity and the aggregate-data boundary. Without a configured provider, identify the offline path honestly.
+## 0:45–1:15 — Investigate the sales change
+Return to Overview and ask exactly "What changed in revenue?" Show the earlier/current totals and group contributions, which add up to the change. Expand Calculation details only if needed. The evidence identifies where the recorded change occurred; it does not establish why behavior changed.
 
-## 1:20–1:45 — Test a decision
-Open an experiment draft. Propose a small offer with a holdout, an explicit budget and an evaluation window. Explain that it has not been sent and that no uplift is promised. The owner controls the decision.
+The default path is deterministic and requires no provider credentials. If AI has separately been configured and verified, identify that provider and show actual tool/delegation activity. Do not describe an offline response as a live model demonstration.
 
-## 1:45–2:00 — Bring your own business
-Open Data source and show preview-before-import, the immutable dataset list, and the synthetic flag. Close with the useful outcome: an owner can trace a question back to observed customers and decide what to test next.
+## 1:15–1:45 — Test a decision
+Open an experiment draft. Set an audience, offer, budget, and evaluation window; click Calculate pilot. Show the offer/holdout split and cost ceiling, then Copy draft to preserve the reviewed assumptions. No customers are assigned or contacted, and no uplift is promised.
+
+## 1:45–2:00 — Bring your own records
+Open Data source and show preview-before-import, purchase/refund totals, immutable stored datasets, and the synthetic flag. The owner can review the evidence before changing the active dataset.
 
 ## Evidence still needed
-- Actual business consultation and permission to describe it for Peri.
+- Actual business consultation and permission to describe it for Peri; see [owner interview](OWNER_INTERVIEW.md).
 - Live provider demonstration for AI integration claims.
 - Confirmed current event rules and final track selection.
 - A new public repository and submission if the user chooses to publish; this local fork has not been published.

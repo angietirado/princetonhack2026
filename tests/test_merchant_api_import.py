@@ -193,3 +193,26 @@ def test_pilot_api_rejects_unobserved_future_end():
         })
         assert response.status_code == 422
         assert 'within observed coverage' in response.json()['detail']
+
+
+def test_offline_revenue_change_uses_same_comparison_as_dashboard():
+    with TestClient(create_app(token='')) as client:
+        comparison = client.get('/api/v1/owner/compare').json()
+        result = client.post('/api/v1/owner/ask', json={'question':'What changed in revenue this period?'}).json()
+        assert result['status'] == 'answered'
+        evidence = result['evidence'][0]
+        assert evidence['delta_cents'] == comparison['delta_cents']
+        assert sum(row['delta_cents'] for row in evidence['groups']) == comparison['delta_cents']
+        assert 'not why customer behavior changed' in result['answer']
+        assert result['source']['dataset_id'] == 'demo'
+        assert 'contributors' not in evidence
+
+
+def test_imported_short_history_change_discloses_unknown_baseline(tmp_path):
+    with TestClient(create_app(token='owner-token',data_dir=tmp_path)) as client:
+        key = import_data(client)
+        result = client.post('/api/v1/owner/ask', json={'question':'Why did sales go up?'}, headers=HEADERS).json()
+        assert result['source']['dataset_id'] == key
+        assert result['evidence'][0]['fully_covered'] is False
+        assert result['evidence'][0]['change_fraction'] is None
+        assert 'unknown dates' in result['answer']
