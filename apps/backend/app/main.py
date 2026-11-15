@@ -20,7 +20,7 @@ from .database import ensure_indexes
 from .devdata import DEV_USERNAMES, dev_user_id, ensure_dev_data
 from .schemas import (
     AppConfig, Category, Conversation, ConversationInput, DevSessionInput, DevStudents,
-    Health, Listing, ListingInput, ListingPatch, Message, MessageInput, Page,
+    Health, Listing, ListingInput, ListingKind, ListingPatch, Message, MessageInput, Page,
     ProfileInput, StudentInput, User,
 )
 
@@ -44,8 +44,9 @@ def public_user(user: dict) -> dict:
     return {"id": user["_id"], "display_name": user["display_name"], "university": user["university"], "edu_eligible": True, "email_verified": False}
 
 
-def private_user(user: dict) -> dict:
-    return {**public_user(user), "email": user["email"], "created_at": iso(user["created_at"]), "dev_username": user.get("dev_username")}
+def private_user(user: dict, database) -> dict:
+    tickets = database.listings.count_documents({"seller_id": user["_id"], "earned_iou": True})
+    return {**public_user(user), "email": user["email"], "created_at": iso(user["created_at"]), "dev_username": user.get("dev_username"), "campus_location": user.get("campus_location", "Campus Center"), "iou_tickets": tickets}
 
 
 def page_result(items: list, total: int, page: int, page_size: int) -> dict:
@@ -157,10 +158,12 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
             **{key: document[key] for key in ("title", "description", "price_cents", "category", "condition", "pickup_location", "image_url", "status")},
             "seller": public_user(seller), "created_at": iso(document["created_at"]),
             "updated_at": iso(document["updated_at"]), "is_demo": document.get("is_demo", False),
+            "kind": document.get("kind", "sale"), "needs_repair": document.get("needs_repair", False),
+            "rental_period": "day" if document.get("kind") == "rent" else None,
         }
 
     def listing_or_404(database, listing_id: str) -> dict:
-        listing = database.listings.find_one(visible_data({"_id": listing_id, "deleted": {"$ne": True}}))
+        listing = database.listings.find_one(visible_data({"_id": listing_id, "deleted": {"$ne": True}, "is_service": {"$ne": True}}))
         if not listing:
             raise HTTPException(404, "Listing not found")
         return listing
@@ -169,7 +172,7 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
         listing = database.listings.find_one({"_id": document["listing_id"]})
         return {
             "id": document["_id"],
-            "listing": {"id": listing["_id"], "title": listing["title"], "price_cents": listing["price_cents"], "image_url": listing["image_url"], "status": "removed" if listing.get("deleted") else listing["status"]},
+            "listing": {"id": listing["_id"], "title": listing["title"], "price_cents": listing["price_cents"], "image_url": listing["image_url"], "status": "removed" if listing.get("deleted") else listing["status"], "kind": listing.get("kind", "sale"), "pickup_location": listing["pickup_location"]},
             "buyer": public_user(database.users.find_one({"_id": document["buyer_id"]})),
             "seller": public_user(database.users.find_one({"_id": document["seller_id"]})),
             "last_message": document["last_message"], "created_at": iso(document["created_at"]), "updated_at": iso(document["updated_at"]),
@@ -208,7 +211,7 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
             if not user:
                 raise HTTPException(404, "Development student not found")
             remember_profile(user, request, response, database)
-            return private_user(user)
+            return private_user(user, database)
 
     @application.post("/api/student/verify", response_model=User, tags=["student"])
     def check_student_email(payload: StudentInput, request: Request, response: Response, database=Depends(db)):
@@ -240,7 +243,7 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
             user = {"_id": str(uuid4()), **profile_fields, "created_at": now}
             database.users.insert_one(user)
         remember_profile(user, request, response, database)
-        return private_user(user)
+        return private_user(user, database)
 
     @application.delete("/api/student/session", status_code=204, tags=["student"])
     def clear_browser_profile(request: Request, response: Response, database=Depends(db)):
@@ -250,28 +253,36 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
         response.delete_cookie(COOKIE_NAME, httponly=True, secure=config.cookie_secure, samesite="lax", path="/")
 
     @application.get("/api/me", response_model=User, tags=["account"])
-    def me(user=Depends(current_user)):
-        return private_user(user)
+    def me(user=Depends(current_user), database=Depends(db)):
+        return private_user(user, database)
 
     @application.patch("/api/me", response_model=User, tags=["account"])
     def update_me(payload: ProfileInput, user=Depends(current_user), database=Depends(db)):
-        updated = database.users.find_one_and_update({"_id": user["_id"]}, {"$set": {"display_name": payload.display_name}}, return_document=ReturnDocument.AFTER)
-        return private_user(updated)
+        changes = payload.model_dump(exclude_unset=True)
+        if not changes:
+            raise HTTPException(422, "Provide at least one field to update")
+        updated = database.users.find_one_and_update({"_id": user["_id"]}, {"$set": changes}, return_document=ReturnDocument.AFTER)
+        return private_user(updated, database)
 
     @application.get("/api/listings", response_model=Page[Listing], tags=["listings"])
     def listings(
         q: str = Query(default="", max_length=100), category: Category | None = None,
+        kind: ListingKind | None = None, location: str | None = Query(default=None, max_length=160),
         min_price: int | None = Query(default=None, ge=0), max_price: int | None = Query(default=None, ge=0),
         sort: Literal["newest", "price_asc", "price_desc"] = "newest",
         page: int = Query(default=1, ge=1), page_size: int = Query(default=24, ge=1, le=100), database=Depends(db),
     ):
         if min_price is not None and max_price is not None and min_price > max_price:
             raise HTTPException(422, "Minimum price cannot exceed maximum price")
-        query: dict = visible_data({"deleted": {"$ne": True}, "status": {"$in": ["available", "reserved"]}})
+        query: dict = visible_data({"deleted": {"$ne": True}, "is_service": {"$ne": True}, "status": {"$in": ["available", "reserved"]}})
         if q.strip():
             query["$or"] = [{field: {"$regex": re.escape(q.strip()), "$options": "i"}} for field in ("title", "description")]
         if category:
             query["category"] = category
+        if kind:
+            query["kind"] = {"$in": ["sale", None]} if kind == "sale" else kind
+        if location and location.strip():
+            query["pickup_location"] = {"$regex": f"^{re.escape(location.strip())}$", "$options": "i"}
         if min_price is not None or max_price is not None:
             query["price_cents"] = {}
             if min_price is not None:
@@ -284,7 +295,7 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
 
     @application.get("/api/me/listings", response_model=Page[Listing], tags=["account"])
     def my_listings(page: int = Query(default=1, ge=1), page_size: int = Query(default=24, ge=1, le=100), user=Depends(current_user), database=Depends(db)):
-        query = visible_data({"seller_id": user["_id"], "deleted": {"$ne": True}})
+        query = visible_data({"seller_id": user["_id"], "deleted": {"$ne": True}, "is_service": {"$ne": True}})
         documents = database.listings.find(query).sort([("created_at", -1), ("_id", 1)]).skip((page - 1) * page_size).limit(page_size)
         return page_result([listing_json(item, database) for item in documents], database.listings.count_documents(query), page, page_size)
 
@@ -292,7 +303,7 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
     def create_listing(payload: ListingInput, user=Depends(current_user), database=Depends(db)):
         rate_limit(database, f"listing:{user['_id']}", 30)
         now = utcnow()
-        document = {"_id": str(uuid4()), **payload.model_dump(), "seller_id": user["_id"], "status": "available", "created_at": now, "updated_at": now, "deleted": False, "is_demo": False, "is_dev": bool(user.get("dev_username"))}
+        document = {"_id": str(uuid4()), **payload.model_dump(), "seller_id": user["_id"], "status": "available", "created_at": now, "updated_at": now, "deleted": False, "is_demo": False, "is_dev": bool(user.get("dev_username")), "earned_iou": payload.kind == "free"}
         database.listings.insert_one(document)
         return listing_json(document, database)
 
@@ -308,8 +319,15 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
         changes = payload.model_dump(exclude_unset=True)
         if not changes:
             raise HTTPException(422, "Provide at least one field to update")
+        if listing.get("active_order_id"):
+            raise HTTPException(409, "This listing has a committed pickup. Manage it from the order.")
+        resulting = {**listing, **changes}
+        if resulting.get("kind", "sale") in {"free", "urgent", "wanted"} and resulting["price_cents"] != 0:
+            raise HTTPException(422, "Free items and requests must have a zero price")
+        if resulting.get("kind") == "rent" and resulting["price_cents"] == 0:
+            raise HTTPException(422, "Rentals must have a positive daily price")
         changes["updated_at"] = utcnow()
-        document = database.listings.find_one_and_update({"_id": listing_id, "seller_id": user["_id"], "deleted": {"$ne": True}}, {"$set": changes}, return_document=ReturnDocument.AFTER)
+        document = database.listings.find_one_and_update({"_id": listing_id, "seller_id": user["_id"], "deleted": {"$ne": True}, "active_order_id": {"$exists": False}}, {"$set": changes}, return_document=ReturnDocument.AFTER)
         if not document:
             raise HTTPException(404, "Listing not found")
         return listing_json(document, database)
@@ -319,7 +337,14 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
         listing = listing_or_404(database, listing_id)
         if listing["seller_id"] != user["_id"]:
             raise HTTPException(403, "Only the seller can remove this listing")
-        database.listings.update_one({"_id": listing_id, "seller_id": user["_id"], "deleted": {"$ne": True}}, {"$set": {"deleted": True, "updated_at": utcnow()}})
+        active = listing.get("active_order_id")
+        if active:
+            fulfilled = database.orders.find_one({"_id": active, "status": "completed", "kind": {"$ne": "rent"}})
+            if not fulfilled:
+                raise HTTPException(409, "This listing has a committed pickup. Manage it from the order.")
+        result = database.listings.update_one({"_id": listing_id, "seller_id": user["_id"], "deleted": {"$ne": True}, "active_order_id": active if active else {"$exists": False}}, {"$set": {"deleted": True, "updated_at": utcnow()}})
+        if not result.matched_count:
+            raise HTTPException(409, "The listing changed. Refresh and try again.")
 
     @application.post("/api/listings/{listing_id}/conversations", response_model=Conversation, status_code=201, tags=["messages"])
     def start_conversation(listing_id: str, payload: ConversationInput, response: Response, user=Depends(current_user), database=Depends(db)):
@@ -368,6 +393,10 @@ def create_app(settings: Settings | None = None, database=None) -> FastAPI:
         database.conversations.update_one({"_id": conversation_id}, {"$set": {"last_message": payload.body, "updated_at": now}})
         return message_json(document)
 
+    from .marketplace import install_marketplace_routes
+    install_marketplace_routes(application, db=db, current_user=current_user, visible_data=visible_data,
+                               listing_json=listing_json, listing_or_404=listing_or_404, public_user=public_user,
+                               utcnow=utcnow, iso=iso, page_result=page_result, rate_limit=rate_limit)
     return application
 
 

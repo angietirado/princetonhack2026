@@ -1,5 +1,7 @@
 # Campus Exchange plan and endpoints
 
+The frontend now uses the partner's 2ndLife design from `angietcm`. See [ANGIETCM_INTEGRATION.md](ANGIETCM_INTEGRATION.md) for the merge plan and added listing, pickup, and repair endpoints. The base API and identity rules below remain supported.
+
 React + TypeScript + Vite frontend, FastAPI backend, MongoDB (PyMongo), and Docker Compose. Check that an email is syntactically valid and ends in `.edu`; no email delivery, passwords, or sign-in flow. Every browser profile can buy and sell. Payment and pickup are arranged externally between students.
 
 ## Current implementation plan
@@ -60,7 +62,7 @@ MongoDB collections: users (emails are not unique identities), sessions (hashed 
 ## Validation
 Test email domains, same-email browser isolation, profile expiry/clearing, listing ownership, message privacy, filters/statuses, and the same person buying and selling. Run tests against mongomock and real MongoDB, production Docker builds, HTTP smoke flow, and desktop/mobile browser checks.
 
-API checks: 41 tests pass against mongomock and real MongoDB, including eight development-mode tests for switching, data isolation, disabled-mode access, and fixture persistence. Docker and browser checks cover the regular marketplace flow plus development switching, own-listing isolation, reload persistence, and desktop/mobile layout. Local `.env` enables development accounts; `.env.example` keeps them disabled by default.
+API checks: 60 tests pass against mongomock and real MongoDB, including development-mode switching/isolation and the new listing, pickup, rental, and repair flows. The live Docker smoke test covers profile isolation, two-way trading, messages, pickup progress, rental returns, free-post tickets, location, and listing cleanup. Local `.env` enables development accounts; `.env.example` keeps them disabled by default.
 
 ## Later improvements
 Photo uploads, reporting/moderation, saved listings, university filters, and recoverable verified identities. Payment remains external.

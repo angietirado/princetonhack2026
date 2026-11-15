@@ -1,211 +1,67 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { api, ApiError, categories, conditions, errorText, money, type Category, type Config, type Conversation, type DevStudent, type Listing, type ListingStatus, type Page, type User } from './api'
-import { StudentCheckDialog, DetailDialog, ErrorBanner, ListingEditor, Modal, ProfileDialog } from './dialogs'
-import Inbox from './Inbox'
-import { Avatar, Icon, ListingImage } from './visuals'
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { ArrowLeft, ArrowRight, Check, HandHeart, PackageOpen, Plus, ShieldCheck, Sparkles, Store, Wrench, Zap, type LucideIcon } from 'lucide-react';
+import { api, ApiError, errorText, type Config, type DevStudent, type Listing, type Repairer, type User } from './api';
+import { Button, Empty, ErrorNotice, go, json, Loading, Logo, PageTop } from './shared';
+import { HomePage, ItemModal, PostPage } from './marketplace';
+import { ChatDrawer, InboxDrawer, OrderDetailPage, OrdersPage } from './activity';
+import { ApplicationDrawer, LocationModal, MapModal, ProfileDrawer, RepairBooking, RepairPage } from './community';
 
-type Tab = 'browse' | 'selling' | 'inbox'
-type Dialog = 'student-check' | 'create' | 'edit' | 'detail' | 'profile' | 'delete' | 'clear-profile' | null
+type Overlay = { type: 'item'; item: Listing } | { type: 'profile' } | { type: 'location' } | { type: 'inbox' } | { type: 'chat'; id: string; title: string } | { type: 'repair'; repairer: Repairer } | { type: 'application' } | { type: 'map'; location: string } | null;
 
-export default function App() {
-  const [user, setUser] = useState<User | null>(null)
-  const [config, setConfig] = useState<Config | null>(null)
-  const [devStudents, setDevStudents] = useState<DevStudent[]>([])
-  const [switchingDev, setSwitchingDev] = useState(false)
-  const [devError, setDevError] = useState('')
-  const [sessionLoading, setSessionLoading] = useState(true)
-  const [tab, setTab] = useState<Tab>('browse')
-  const [dialog, setDialog] = useState<Dialog>(null)
-  const [studentIntent, setStudentIntent] = useState<'sell' | 'inbox' | 'selling' | 'contact' | null>(null)
-  const [selected, setSelected] = useState<Listing | null>(null)
-  const [conversation, setConversation] = useState<Conversation | null>(null)
-  const [listings, setListings] = useState<Listing[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [toast, setToast] = useState('')
-  const [query, setQuery] = useState('')
-  const [search, setSearch] = useState('')
-  const [category, setCategory] = useState<Category | ''>('')
-  const [sort, setSort] = useState('newest')
-  const [maxPrice, setMaxPrice] = useState('')
-  const [priceInput, setPriceInput] = useState('')
-  const [showFilters, setShowFilters] = useState(false)
-  const [page, setPage] = useState(1)
-  const [revision, setRevision] = useState(0)
-  const [busyId, setBusyId] = useState('')
-  const [clearingProfile, setClearingProfile] = useState(false)
-  const identityVersion = useRef(0)
-  const switchPending = useRef(false)
-  const refresh = () => setRevision(value => value + 1)
-
-  useEffect(() => {
-    let active = true
-    const initialize = async () => {
-      const [profileResult, configResult] = await Promise.allSettled([api<User>('/me'), api<Config>('/config')])
-      if (!active) return
-      if (profileResult.status === 'fulfilled') setUser(profileResult.value)
-      else if (!(profileResult.reason instanceof ApiError && profileResult.reason.status === 401)) setError('The server is unavailable. Please try again.')
-      setSessionLoading(false)
-      if (configResult.status === 'fulfilled') {
-        setConfig(configResult.value)
-        if (configResult.value.devmode) {
-          try {
-            const result = await api<{ items: DevStudent[] }>('/dev/students')
-            if (active) setDevStudents(result.items)
-          } catch { if (active) setDevStudents([]) }
-        }
-      }
-    }
-    void initialize()
-    return () => { active = false }
-  }, [])
-
-  useEffect(() => {
-    if (!toast) return
-    const timer = setTimeout(() => setToast(''), 4500)
-    return () => clearTimeout(timer)
-  }, [toast])
-
-  const fetchListings = useCallback(async () => {
-    if (tab === 'inbox' || switchingDev || (tab === 'selling' && !user)) return
-    const params = new URLSearchParams({ page: String(page), page_size: '12' })
-    if (tab === 'browse') {
-      params.set('sort', sort)
-      if (search) params.set('q', search)
-      if (category) params.set('category', category)
-      if (maxPrice !== '') params.set('max_price', String(Math.round(Number(maxPrice) * 100)))
-    }
-    return api<Page<Listing>>(`${tab === 'selling' ? '/me/listings' : '/listings'}?${params}`)
-  }, [tab, user, switchingDev, page, sort, search, category, maxPrice])
-
-  useEffect(() => {
-    if (tab === 'inbox' || switchingDev) return
-    let active = true
-    const identity = identityVersion.current
-    setLoading(true); setError('')
-    fetchListings().then(result => {
-      if (!active || identity !== identityVersion.current || !result) return
-      const lastPage = Math.max(1, Math.ceil(result.total / 12))
-      if (page > lastPage) { setPage(lastPage); return }
-      setListings(result.items); setTotal(result.total)
-    }).catch(error => {
-      if (active && identity === identityVersion.current) setError(errorText(error))
-    }).finally(() => {
-      if (active && identity === identityVersion.current) setLoading(false)
-    })
-    return () => { active = false }
-  }, [fetchListings, revision, tab, switchingDev, page])
-
-  const navigate = (next: Tab) => {
-    if (switchingDev) return
-    if (next !== 'browse' && !user) { setStudentIntent(next); setDialog('student-check'); return }
-    setTab(next); setPage(1); setError('')
-  }
-  const sell = () => {
-    if (!user) { setStudentIntent('sell'); setDialog('student-check') }
-    else { setSelected(null); setDialog('create') }
-  }
-  const onStudentChecked = (studentProfile: User) => {
-    identityVersion.current++
-    setUser(studentProfile); setToast('Your profile is ready.')
-    if (studentIntent === 'sell') { setSelected(null); setDialog('create') }
-    else if (studentIntent === 'contact') setDialog('detail')
-    else { setDialog(null); if (studentIntent) { setTab(studentIntent); setPage(1) } }
-    setStudentIntent(null)
-  }
-  const switchDevStudent = async (username: string) => {
-    if (switchPending.current || sessionLoading || user?.dev_username === username) return
-    switchPending.current = true
-    identityVersion.current++
-    setSwitchingDev(true); setLoading(true); setError(''); setDevError(''); setToast('')
-    setDialog(null); setStudentIntent(null); setSelected(null); setConversation(null)
-    setListings([]); setTotal(0); setPage(1); setBusyId('')
-    try {
-      const profile = await api<User>('/dev/session', { method: 'POST', body: JSON.stringify({ username }) })
-      setUser(profile); setToast(`Using ${username}.`)
-    } catch (error) {
-      setDevError(errorText(error))
-    } finally { switchPending.current = false; setSwitchingDev(false); refresh() }
-  }
-  const clearProfile = async () => {
-    setClearingProfile(true); setError('')
-    try {
-      await api('/student/session', { method: 'DELETE' })
-      identityVersion.current++
-      setUser(null); setTab('browse'); setPage(1); setConversation(null); setSelected(null); setDialog(null)
-      setListings([]); setToast('Profile cleared from this browser.')
-    } catch (error) { setError(errorText(error)) } finally { setClearingProfile(false) }
-  }
-  const changeStatus = async (listing: Listing, status: ListingStatus) => {
-    setBusyId(listing.id); setError('')
-    try { await api(`/listings/${listing.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); refresh(); setToast(`Listing marked ${status}.`) }
-    catch (error) { setError(errorText(error)) } finally { setBusyId('') }
-  }
-  const removeListing = async () => {
-    if (!selected) return
-    setBusyId(selected.id); setError('')
-    try { await api(`/listings/${selected.id}`, { method: 'DELETE' }); setDialog(null); refresh(); setToast('Listing removed.') }
-    catch (error) { setError(errorText(error)) } finally { setBusyId('') }
-  }
-  const doSearch = (event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setPage(1) }
-  const clearFilters = () => { setSearch(''); setQuery(''); setCategory(''); setMaxPrice(''); setPriceInput(''); setSort('newest'); setPage(1) }
-  const filtered = tab === 'browse' && Boolean(search || category || maxPrice)
-
-  return <>
-    <header className="site-header">
-      <div className="header-inner">
-        <button className="brand" onClick={() => navigate('browse')} aria-label="Campus Exchange home"><span className="brand-symbol"><Icon name="exchange" size={23} /></span><span>Campus Exchange</span></button>
-        <nav aria-label="Main navigation">
-          <button className={tab === 'browse' ? 'active' : ''} onClick={() => navigate('browse')}>Browse</button>
-          <button className={tab === 'selling' ? 'active' : ''} onClick={() => navigate('selling')}>My listings</button>
-          <button className={tab === 'inbox' ? 'active' : ''} onClick={() => navigate('inbox')}>Messages</button>
-        </nav>
-        <div className="header-actions">
-          {user ? <><button className="profile-button" disabled={switchingDev} onClick={() => setDialog('profile')} aria-label={`Edit ${user.display_name}'s profile`}><Avatar name={user.display_name} small /><span>{user.display_name}</span></button><button className="icon-button" disabled={switchingDev} onClick={() => { setError(''); setDialog('clear-profile') }} aria-label="Clear profile" title="Clear profile"><Icon name="logout" size={18} /></button></> : <button className="student-button" onClick={() => { setStudentIntent(null); setDialog('student-check') }} disabled={sessionLoading || switchingDev}>{sessionLoading ? 'Connecting…' : 'Check .edu email'}</button>}
-          <button className="button primary sell-button" onClick={sell} disabled={switchingDev}><Icon name="plus" size={18} /><span>Sell an item</span></button>
-        </div>
-      </div>
-    </header>
-
-    <main className="main-container">
-      {config?.devmode && devStudents.length > 0 && <section className="dev-switcher" aria-label="Development student profiles">
-        <span className="dev-label">Dev mode</span>
-        <div className="dev-students">{devStudents.map(student => <button key={student.username} aria-pressed={user?.dev_username === student.username} disabled={switchingDev || sessionLoading} onClick={() => switchDevStudent(student.username)}>{student.username}</button>)}</div>
-        <span className="dev-hint">{switchingDev ? 'Switching profile…' : 'Choose a test student'}</span>
-      </section>}
-      <ErrorBanner message={devError} />
-
-      {tab === 'browse' && <section className="marketplace" id="marketplace">
-        <div className="page-heading"><h1>Student marketplace</h1><p>Buy and sell with other students. Arrange payment and pickup directly.</p></div>
-        <form className="market-search" onSubmit={doSearch}><Icon name="search" size={20} /><label className="sr-only" htmlFor="search">Search listings</label><input id="search" placeholder="Search books, furniture, electronics…" value={query} onChange={event => setQuery(event.target.value)} maxLength={100} /><button className="button primary" aria-label="Search listings">Search</button></form>
-        <div className="category-row" role="group" aria-label="Listing categories"><button className={`category-button ${category === '' ? 'selected' : ''}`} onClick={() => { setCategory(''); setPage(1) }}>All items</button>{categories.map(item => <button key={item.id} className={`category-button ${category === item.id ? 'selected' : ''}`} onClick={() => { setCategory(item.id); setPage(1) }}>{item.name}</button>)}</div>
-        <div className="results-toolbar"><div className="result-count">{loading ? 'Loading listings…' : <><strong>{total}</strong> {total === 1 ? 'listing' : 'listings'}{search && <> for “{search}”</>}</>}{filtered && <button className="text-button" onClick={clearFilters}>Clear filters</button>}</div><div className="sort-actions"><button className={`filter-button ${showFilters || maxPrice !== '' ? 'on' : ''}`} onClick={() => setShowFilters(!showFilters)} aria-expanded={showFilters}><Icon name="filter" size={16} />Price</button><select aria-label="Sort listings" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="newest">Newest first</option><option value="price_asc">Price: low to high</option><option value="price_desc">Price: high to low</option></select></div></div>
-        {showFilters && <form className="price-filter" onSubmit={event => { event.preventDefault(); setMaxPrice(priceInput); setPage(1) }}><label htmlFor="max-price">Maximum price (USD)</label><input id="max-price" type="number" min="0" max="100000" step="0.01" placeholder="Any price" value={priceInput} onChange={event => setPriceInput(event.target.value)} /><button className="button primary small">Apply</button>{maxPrice !== '' && <button type="button" className="text-button" onClick={() => { setMaxPrice(''); setPriceInput(''); setPage(1) }}>Reset</button>}</form>}
-      </section>}
-
-      {tab === 'selling' && <div className="page-heading"><h1>My listings</h1><p>Edit your items and update their availability.</p></div>}
-
-      {switchingDev ? <div className="empty-state" role="status"><p>Switching profile…</p></div> : tab !== 'inbox' && <>
-        <ErrorBanner message={error} />
-        {error ? <div className="retry-row"><button className="button secondary" onClick={refresh}>Try again</button></div> : loading ? <div className="listing-grid" aria-label="Loading listings">{Array.from({ length: 4 }, (_, i) => <div className="skeleton-card" key={i}><div /><span /><span /></div>)}</div> : listings.length ? <div className="listing-grid">{listings.map(listing => <article className="listing-card" key={listing.id}>
-          <button className="listing-open" onClick={() => { setSelected(listing); setDialog('detail') }} aria-label={`View ${listing.title}, ${money(listing.price_cents)}`}>
-            <div className="listing-image-wrap"><ListingImage listing={listing} /><span className="condition-tag">{conditions[listing.condition]}</span>{listing.status !== 'available' && <span className={`status-badge status-${listing.status}`}>{listing.status}</span>}{listing.is_demo && <span className="demo-label">Demo</span>}</div>
-            <div className="listing-content"><div className="listing-price">{money(listing.price_cents)}</div><h3>{listing.title}</h3><div className="listing-location"><Icon name="pin" size={14} /><span>{listing.pickup_location}</span></div><div className="listing-seller"><span>{listing.seller.display_name}</span><time dateTime={listing.created_at}>{new Date(listing.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</time></div></div>
-          </button>
-          {tab === 'selling' && <div className="owner-controls"><label className="sr-only" htmlFor={`status-${listing.id}`}>Status for {listing.title}</label><select id={`status-${listing.id}`} value={listing.status} onChange={event => changeStatus(listing, event.target.value as ListingStatus)} disabled={busyId === listing.id}><option value="available">Available</option><option value="reserved">Reserved</option><option value="sold">Sold</option></select><button className="icon-button" aria-label={`Edit ${listing.title}`} onClick={() => { setSelected(listing); setDialog('edit') }}><Icon name="edit" size={17} /></button><button className="icon-button" aria-label={`Delete ${listing.title}`} onClick={() => { setSelected(listing); setDialog('delete') }}><Icon name="trash" size={17} /></button></div>}
-        </article>)}</div> : <div className="empty-state"><Icon name={tab === 'selling' ? 'bag' : 'search'} size={30} /><h2>{tab === 'selling' ? 'No listings yet' : filtered ? 'No matching listings' : 'No items listed yet'}</h2><p>{tab === 'selling' ? 'Post an item you want to sell.' : filtered ? 'Try another search or clear the filters.' : 'Be the first to list something.'}</p><button className="button primary" onClick={filtered ? clearFilters : sell}>{filtered ? 'Clear filters' : 'Sell an item'}</button></div>}
-        {!loading && !error && total > 12 && <div className="pagination"><button className="button secondary small" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page} of {Math.ceil(total / 12)}</span><button className="button secondary small" disabled={page * 12 >= total} onClick={() => setPage(page + 1)}>Next</button></div>}
-      </>}
-      {!switchingDev && tab === 'inbox' && user && <Inbox key={user.id} user={user} initialConversation={conversation} />}
-    </main>
-
-    {toast && <div className="toast" role="status"><Icon name="check" size={19} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={16} /></button></div>}
-    {dialog === 'student-check' && <StudentCheckDialog onClose={() => { setDialog(null); setStudentIntent(null) }} onSuccess={onStudentChecked} />}
-    {(dialog === 'create' || dialog === 'edit') && user && <ListingEditor listing={dialog === 'edit' ? selected || undefined : undefined} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); setTab('selling'); setPage(1); refresh(); setToast(dialog === 'edit' ? 'Listing updated.' : 'Listing published.') }} />}
-    {dialog === 'detail' && selected && <DetailDialog listing={selected} user={user} onClose={() => setDialog(null)} onCheckStudent={() => { setStudentIntent('contact'); setDialog('student-check') }} onEdit={() => setDialog('edit')} onConversation={conversation => { setConversation(conversation); setTab('inbox'); setDialog(null) }} />}
-    {dialog === 'profile' && user && <ProfileDialog user={user} onClose={() => setDialog(null)} onSaved={user => { setUser(user); setDialog(null); refresh(); setToast('Profile updated.') }} />}
-    {dialog === 'clear-profile' && <Modal title="Clear this profile?" subtitle={user?.dev_username ? 'You can select this test student again from the dev switcher. Its listings and messages will stay saved.' : 'This browser will lose access to your listings and messages. Entering the same email later creates a new profile.'} onClose={() => { if (!clearingProfile) setDialog(null) }}><ErrorBanner message={error} /><div className="form-actions"><button className="button secondary" disabled={clearingProfile} onClick={() => setDialog(null)}>Keep profile</button><button className="button danger" disabled={clearingProfile} onClick={clearProfile}>{clearingProfile ? 'Clearing…' : 'Clear profile'}</button></div></Modal>}
-    {dialog === 'delete' && selected && <Modal title="Remove listing?" subtitle={`“${selected.title}” will be removed. Existing messages will remain available.`} onClose={() => setDialog(null)}><ErrorBanner message={error} /><div className="form-actions"><button className="button secondary" onClick={() => setDialog(null)}>Keep listing</button><button className="button danger" disabled={busyId === selected.id} onClick={removeListing}>{busyId === selected.id ? 'Removing…' : 'Remove listing'}</button></div></Modal>}
-  </>
+function App() {
+  const [path, setPath] = useState(window.location.pathname.replace(/\/+$/, '') || '/'); const [user, setUser] = useState<User | null>(null); const [config, setConfig] = useState<Config | null>(null); const [students, setStudents] = useState<DevStudent[]>([]);
+  const [sessionLoading, setSessionLoading] = useState(true); const [sessionError, setSessionError] = useState(''); const [switching, setSwitching] = useState(false); const [identityPending, setIdentityPending] = useState(false); const sessionBusy = useRef(false);
+  const identityEpoch = useRef(0); const currentUser = useRef<User | null>(null);
+  const [overlay, setOverlay] = useState<Overlay>(null); const [editing, setEditing] = useState<Listing | null>(null); const [revision, setRevision] = useState(0); const [toast, setToast] = useState(''); const toastTimer = useRef<number>();
+  useEffect(() => { const handler = () => { setPath(window.location.pathname.replace(/\/+$/, '') || '/'); setOverlay(null); }; window.addEventListener('popstate', handler); return () => window.removeEventListener('popstate', handler); }, []);
+  useEffect(() => { let active = true; Promise.all([api<Config>('/config'), api<User>('/me').catch(error => { if (error instanceof ApiError && error.status === 401) return null; throw error; })]).then(async ([nextConfig, profile]) => { const dev = nextConfig.devmode ? await api<{ items: DevStudent[] }>('/dev/students') : { items: [] }; if (active) { setConfig(nextConfig); setStudents(dev.items); currentUser.current = profile; setUser(profile); } }).catch(error => { if (active) setSessionError(errorText(error)); }).finally(() => { if (active) setSessionLoading(false); }); return () => { active = false; }; }, []);
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+  const notify = (message: string) => { setToast(message); window.clearTimeout(toastTimer.current); toastTimer.current = window.setTimeout(() => setToast(''), 3500); };
+  const changed = () => setRevision(value => value + 1);
+  const refreshUser = async () => { const epoch = identityEpoch.current; const expectedId = currentUser.current?.id; try { const profile = await api<User>('/me'); if (!sessionBusy.current && identityEpoch.current === epoch && currentUser.current?.id === expectedId && profile.id === expectedId) { currentUser.current = profile; setUser(profile); } } catch (error) { if (identityEpoch.current === epoch) notify(errorText(error)); } };
+  const requireUser = () => { if (user) return true; notify('Add your .edu email to continue.'); go('/login'); return false; };
+  const mutateIdentity = async (request: () => Promise<User | null>, hideContent = false) => {
+    if (sessionBusy.current || sessionLoading) throw new Error('Please wait for the current profile change.');
+    sessionBusy.current = true; identityEpoch.current += 1; setIdentityPending(true); setSwitching(hideContent); setOverlay(null); setEditing(null); setSessionError('');
+    try { const profile = await request(); currentUser.current = profile; setUser(profile); changed(); go(profile ? '/home' : '/login'); }
+    catch (error) { if (hideContent) setSessionError(errorText(error)); throw error; }
+    finally { sessionBusy.current = false; setIdentityPending(false); setSwitching(false); }
+  };
+  const selectDev = async (username: string) => { if (sessionBusy.current || sessionLoading) return; try { await mutateIdentity(() => api<User>('/dev/session', { method: 'POST', body: json({ username }) }), true); notify(`Using ${username}`); } catch { /* The shared handler displays the error. */ } };
+  const submitStudent = (email: string, name: string) => mutateIdentity(() => api<User>('/student/verify', { method: 'POST', body: json({ email, ...(name.trim() ? { display_name: name } : {}) }) }));
+  const clearProfile = async () => { await mutateIdentity(async () => { await api('/student/session', { method: 'DELETE' }); return null; }, true); notify('Browser profile cleared'); };
+  const renderedEpoch = identityEpoch.current; const renderedUserId = user?.id;
+  const updateSameProfile = (profile: User) => { if (!sessionBusy.current && identityEpoch.current === renderedEpoch && currentUser.current?.id === profile.id && profile.id === renderedUserId) { currentUser.current = profile; setUser(profile); } };
+  const openChat = (id: string, title: string) => { if (!sessionBusy.current && identityEpoch.current === renderedEpoch && currentUser.current?.id === renderedUserId) setOverlay({ type: 'chat', id, title }); };
+  const devBar = config?.devmode && <div className="dev-bar" aria-label="Development student profiles"><span>Dev mode</span>{students.map(student => <button key={student.username} aria-pressed={user?.dev_username === student.username} disabled={identityPending || sessionLoading} onClick={() => void selectDev(student.username)}>{student.username}</button>)}</div>;
+  const isPublic = path === '/' || path === '/login';
+  const onEdit = (item: Listing) => { setEditing(item); setOverlay(null); go('/post'); };
+  return <div className="app-frame">{sessionError && <ErrorNotice message={sessionError} retry={() => window.location.reload()} />}{sessionLoading || switching ? <div className="session-loading"><Logo light={false} /><Loading /></div> : <div key={user?.id || 'visitor'}>
+    {isPublic ? <>{path === '/' ? <LandingPage hasProfile={!!user} /> : <LoginPage user={user} busy={identityPending} onSubmit={submitStudent} />}{devBar}</> : <div className="mobile-app"><div className="app-content">{devBar}
+      {path === '/home' && <HomePage user={user} revision={revision} onOpenListing={item => setOverlay({ type: 'item', item })} onProfile={() => user ? setOverlay({ type: 'profile' }) : go('/login')} onLocation={() => { if (requireUser()) setOverlay({ type: 'location' }); }} onInbox={() => { if (requireUser()) setOverlay({ type: 'inbox' }); }} />}
+      {path === '/repair' && <RepairPage user={user} revision={revision} onApply={() => { if (requireUser()) setOverlay({ type: 'application' }); }} onRepairer={repairer => { if (requireUser()) setOverlay({ type: 'repair', repairer }); }} />}
+      {path === '/post' && (user ? <PostPage key={editing?.id || 'new'} user={user} initial={editing} notify={notify} onDone={() => { setEditing(null); changed(); void refreshUser(); }} /> : <AccessPrompt />)}
+      {path === '/orders' && (user ? <OrdersPage user={user} revision={revision} onOpenListing={item => setOverlay({ type: 'item', item })} onInbox={() => setOverlay({ type: 'inbox' })} onChat={openChat} /> : <AccessPrompt />)}
+      {path.startsWith('/orders/') && (user ? <OrderDetailPage user={user} orderId={path.split('/')[2]} onChat={openChat} onMap={location => setOverlay({ type: 'map', location })} notify={notify} /> : <AccessPrompt />)}
+      {!['/home', '/repair', '/post', '/orders'].includes(path) && !path.startsWith('/orders/') && <main className="page"><Empty title="Page not found" /><Button className="primary full" onClick={() => go('/home')}>Back to home</Button></main>}
+    </div><BottomNav path={path} onPost={() => { setEditing(null); go('/post'); }} /></div>}
+    {overlay?.type === 'item' && <ItemModal listing={overlay.item} user={user} onClose={() => setOverlay(null)} onEdit={onEdit} onChanged={changed} onNeedProfile={requireUser} onChat={openChat} notify={notify} />}
+    {overlay?.type === 'profile' && user && <ProfileDrawer user={user} onClose={() => setOverlay(null)} onUser={updateSameProfile} onClear={clearProfile} onOpenListing={item => setOverlay({ type: 'item', item })} notify={notify} />}
+    {overlay?.type === 'location' && user && <LocationModal user={user} onUser={updateSameProfile} onClose={() => setOverlay(null)} />}
+    {overlay?.type === 'inbox' && user && <InboxDrawer user={user} onClose={() => setOverlay(null)} onChat={openChat} />}
+    {overlay?.type === 'chat' && user && <ChatDrawer key={overlay.id} user={user} conversationId={overlay.id} title={overlay.title} onClose={() => setOverlay(null)} />}
+    {overlay?.type === 'repair' && user && <RepairBooking repairer={overlay.repairer} user={user} onClose={() => setOverlay(null)} onChat={openChat} />}
+    {overlay?.type === 'application' && user && <ApplicationDrawer onClose={() => setOverlay(null)} onDone={() => { setOverlay(null); changed(); notify('Repair profile published'); }} />}
+    {overlay?.type === 'map' && <MapModal location={overlay.location} onClose={() => setOverlay(null)} />}
+  </div>}{toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}</div>;
 }
+function LandingPage({ hasProfile }: { hasProfile: boolean }) { return <div className="landing"><div className="landing-hero"><Logo /><div className="hero-art"><div className="hero-circle"><PackageOpen size={72} strokeWidth={1.2} /></div><span className="hero-spark">✦</span></div><p className="eyebrow light">Student exchange</p><h1>Give campus life<br /><em>a second life.</em></h1><p className="landing-copy">Buy, sell, repair, and share what you need with students nearby.</p></div><div className="landing-body"><div className="value-props"><Value icon={Store} title="Buy & sell as-is" /><Value icon={Wrench} title="Campus repairs" /><Value icon={Zap} title="Urgent requests" /><Value icon={HandHeart} title="Share locally" /></div><Button className="primary full" onClick={() => go(hasProfile ? '/home' : '/login')}>{hasProfile ? 'Back to your campus' : 'Continue with .edu'} <ArrowRight size={17} /></Button><button className="text-link" onClick={() => go('/home')}>Take a look around <b>Browse listings</b></button></div></div>; }
+function Value({ icon: Icon, title }: { icon: LucideIcon; title: string }) { return <div><div className="value-icon"><Icon size={18} /></div><span>{title}</span></div>; }
+function AccessPrompt() { return <main className="page"><PageTop title="Your campus profile" /><Empty title="Add your student email">One browser profile for buying, selling, and sharing.</Empty><Button className="primary full" onClick={() => go('/login')}>Continue with .edu <ArrowRight size={17} /></Button></main>; }
+function LoginPage({ user, busy, onSubmit }: { user: User | null; busy: boolean; onSubmit: (email: string, name: string) => Promise<void> }) {
+  const [email, setEmail] = useState(user?.email || ''); const [name, setName] = useState(user?.display_name || ''); const [error, setError] = useState('');
+  const submit = async (event: FormEvent) => { event.preventDefault(); if (busy) return; setError(''); try { await onSubmit(email, name); } catch (error) { setError(errorText(error)); } };
+  return <div className="auth-page"><div className="auth-top"><button className="icon-btn" aria-label="Back to welcome" onClick={() => go('/')}><ArrowLeft size={20} /></button><Logo light={false} /><span /></div><div className="auth-inner"><div className="auth-welcome"><div className="small-logo"><Sparkles size={16} /></div><p className="eyebrow">Student access</p><h1>Welcome to 2ndLife.</h1><p>Your campus, your community, less waste. Add a .edu email to buy, sell, and share.</p></div><form className="form-stack" onSubmit={submit}><label>Your name <span className="field-hint">Optional</span><input autoComplete="name" value={name} onChange={event => setName(event.target.value)} minLength={2} maxLength={60} placeholder="Alex Johnson" /></label><label>Campus email<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@university.edu" required maxLength={254} /></label><ErrorNotice message={error} /><Button type="submit" className="primary full" disabled={busy}>{busy ? 'Checking…' : 'Continue'} <ArrowRight size={17} /></Button></form><p className="switch-auth">No password or email code. This profile stays in this browser.</p></div><p className="auth-foot"><ShieldCheck size={14} /> We check the .edu ending, not inbox ownership.</p></div>;
+}
+function BottomNav({ path, onPost }: { path: string; onPost: () => void }) { const items = [{ label: 'Home', icon: Store, path: '/home' }, { label: 'Repair', icon: Wrench, path: '/repair' }, { label: 'Post', icon: Plus, path: '/post' }, { label: 'Orders', icon: PackageOpen, path: '/orders' }]; return <nav className="bottom-nav" aria-label="Main navigation">{items.map(({ label, icon: Icon, path: itemPath }) => <button key={label} className={path === itemPath || itemPath === '/orders' && path.startsWith('/orders/') ? 'active' : ''} onClick={itemPath === '/post' ? onPost : () => go(itemPath)}><span className={label === 'Post' ? 'post-icon' : ''}><Icon size={17} /></span>{label}</button>)}</nav>; }
+export default App;

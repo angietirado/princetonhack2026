@@ -2,13 +2,19 @@ export type Category = 'books' | 'electronics' | 'furniture' | 'clothing' | 'spo
 export type ListingStatus = 'available' | 'reserved' | 'sold'
 export type Condition = 'new' | 'like_new' | 'good' | 'fair'
 export interface PublicUser { id: string; display_name: string; university: string; edu_eligible: boolean; email_verified: false }
-export interface User extends PublicUser { email: string; created_at: string; dev_username: string | null }
+export interface User extends PublicUser { email: string; created_at: string; dev_username: string | null; campus_location: string; iou_tickets: number }
 export interface DevStudent { username: string; id: string; display_name: string; email: string }
 export interface Listing {
   id: string; title: string; description: string; price_cents: number; category: Category;
   condition: Condition; pickup_location: string; image_url: string | null; status: ListingStatus;
   seller: PublicUser; created_at: string; updated_at: string; is_demo: boolean;
+  kind: ListingKind; needs_repair: boolean; rental_period: 'day' | null;
 }
+export type ListingKind = 'sale' | 'rent' | 'free' | 'urgent' | 'wanted'
+export type OrderStatus = 'requested' | 'accepted' | 'ready' | 'completed' | 'returned' | 'cancelled'
+export interface Order { id: string; listing: Listing; buyer: PublicUser; seller: PublicUser; status: OrderStatus; pickup_location: string; conversation_id: string; created_at: string; updated_at: string }
+export interface Repairer { id: string; user: PublicUser; specialties: string[]; about: string; rate_cents: number; portfolio_image_url: string | null; verification: 'self_reported'; created_at: string; updated_at: string }
+export interface RepairRequest { id: string; repairer: Repairer; requester: PublicUser; description: string; location: string; status: 'requested' | 'accepted' | 'completed' | 'cancelled'; conversation_id: string; created_at: string; updated_at: string }
 export interface Conversation {
   id: string; listing: Pick<Listing, 'id' | 'title' | 'price_cents' | 'image_url'> & { status: ListingStatus | 'removed' };
   buyer: PublicUser; seller: PublicUser; last_message: string; updated_at: string; created_at: string;
@@ -18,7 +24,7 @@ export interface Page<T> { items: T[]; total: number; page: number; page_size: n
 export interface Config { email_policy: string; verification_mode: 'domain_only'; demo_data: boolean; devmode: boolean }
 export class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
 
-export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, options: RequestInit = {}, onStatus?: (status: number) => void): Promise<T> {
   let response: Response
   try {
     response = await fetch(`/api${path}`, {
@@ -38,6 +44,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     } catch { /* The server may not return JSON on a gateway failure. */ }
     throw new ApiError(message, response.status)
   }
+  onStatus?.(response.status)
   return response.status === 204 ? undefined as T : response.json()
 }
 

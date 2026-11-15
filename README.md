@@ -1,10 +1,10 @@
-# Campus Exchange
+# 2ndLife Campus Exchange
 
-A student classifieds marketplace built with **React + TypeScript + Vite**, **FastAPI**, **MongoDB**, and **Docker Compose**. Enter a valid `.edu` address to use a lightweight browser profile. No passwords, emailed codes, or sign-in steps. Every profile can both buy and sell.
+A student classifieds marketplace built with **React + TypeScript + Vite**, **FastAPI**, **MongoDB**, and **Docker Compose**. The mobile-first 2ndLife frontend comes from `angietcm`; its teal/cream design, cards, navigation, and sheets are connected to the API. Enter a valid `.edu` address to use a lightweight browser profile. No passwords, emailed codes, or sign-in steps. Every profile can both buy and sell.
 
 The check validates email format and the `.edu` domain only; it does not prove inbox ownership or enrollment. Buyer and seller arrange payment and pickup directly, like a classifieds marketplace. There is no checkout or payment processing.
 
-See [docs/PLAN.md](docs/PLAN.md) for the endpoint contract and design.
+See [docs/PLAN.md](docs/PLAN.md) for the base endpoint contract and [docs/ANGIETCM_INTEGRATION.md](docs/ANGIETCM_INTEGRATION.md) for the frontend merge and added features.
 
 ## Start with Docker
 
@@ -25,19 +25,24 @@ Services are bound to localhost. MongoDB data survives restarts in the `campus-e
 
 ## Development profiles
 
-Set `DEVMODE=true` in `.env`, then run `docker compose up -d --build`. A compact **Dev mode** bar lets you switch between **dev_student1** and **dev_student2** without entering an email. Both can buy, sell, and message each other. Each starts with an editable listing, so you can test both sides immediately.
+Set `DEVMODE=true` in `.env`, then run `docker compose up -d --build`. The **Dev mode** controls let you switch between **dev_student1** and **dev_student2** without entering an email. Both can buy, sell, and message each other. Editable sample posts cover the marketplace flows so you can test both sides immediately.
 
 These profiles keep the same identity, listings, and messages when you switch away and back or restart the app. Repeated startup does not reset edited or deleted listings. For two students at once, use separate browser/private windows.
 
 Set `DEVMODE=false` and recreate the backend to disable the shortcuts. The server rejects development sessions/routes and hides development listings and conversations in that mode; it retains the data for your next development session. Ordinary `.edu` profiles continue to work normally. Direct Python development uses the same `DEVMODE` process environment variable.
 
+Finish or cancel pickups between a development student and an ordinary profile before disabling the flag. An accepted development pickup stays reserved while hidden; re-enable development mode to manage it. Turning the flag off does not silently cancel an agreed pickup.
+
 ## Try it
 
-1. Choose **Check .edu email**, enter a student email and optional display name, then **Continue**.
-2. Post an item, browse, and message sellers with that same profile.
-3. Use another browser/private window for a second student during testing.
-4. Agree on price, payment method, and pickup in the conversation. Complete payment outside the app.
-5. Sellers can edit listings and mark them reserved or sold.
+1. Continue with a `.edu` address or select a development student.
+2. Browse sale, rental, free, urgent, or wanted posts. Create your own through **Post**.
+3. Request pickup or offer help. Use **Orders** to track Buying, Selling, and Borrowing activity and open private messages.
+4. The seller accepts a request and marks it ready; the buyer confirms pickup. Rental returns make the item available again.
+5. Agree on price, payment method, and pickup in the conversation. Complete payment outside the app.
+6. Visit **Campus Repair** to offer repair skills or request a repair. Skills are self-reported.
+
+Free posts earn one IOU ticket each, shown as a sharing count. Tickets have no payment or redemption role. Location preferences persist in the profile; location filtering uses campus place names, not GPS distances. The item condition checklist records seller-provided details; it does not perform an AI appraisal.
 
 Your browser remembers the profile for seven days. Clearing the profile, losing its cookie, or using another browser starts a separate profile. Entering the same email does not recover another profile or grant access to its listings/messages.
 

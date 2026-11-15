@@ -90,7 +90,8 @@ def test_development_profiles_can_buy_and_sell_without_ownership_bypass(dev_mark
 def test_dev_seed_keeps_edits_deletions_and_new_listings_across_restart(dev_market):
     client = dev_market.client()
     choose(client, "dev_student1")
-    first_listing = client.get("/api/me/listings").json()["items"][0]
+    seed_count = dev_market.database.listings.count_documents({})
+    first_listing = next(item for item in client.get("/api/me/listings").json()["items"] if item.get("kind", "sale") == "sale")
     changed = client.patch(f"/api/listings/{first_listing['id']}", json={"title": "Edited sample lamp", "price_cents": 777, "status": "sold"})
     assert changed.status_code == 200
     added = dev_market.listing(client, title="New development listing")
@@ -104,7 +105,7 @@ def test_dev_seed_keeps_edits_deletions_and_new_listings_across_restart(dev_mark
     assert restarted.get(f"/api/listings/{added['id']}").status_code == 200
     assert restarted.get(f"/api/listings/{second_listing['id']}").status_code == 404
     assert dev_market.database.users.count_documents({}) == 2
-    assert dev_market.database.listings.count_documents({}) == 3
+    assert dev_market.database.listings.count_documents({}) == seed_count + 1
 
 
 def test_dev_switch_cannot_select_arbitrary_users_or_accept_extra_identity_fields(dev_market):

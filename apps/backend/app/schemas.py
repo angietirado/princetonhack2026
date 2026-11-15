@@ -2,11 +2,12 @@ from typing import Generic, Literal, TypeVar
 from urllib.parse import urlsplit
 
 from email_validator import EmailNotValidError, validate_email
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Category = Literal["books", "electronics", "furniture", "clothing", "sports", "other"]
 Condition = Literal["new", "like_new", "good", "fair"]
 Status = Literal["available", "reserved", "sold"]
+ListingKind = Literal["sale", "rent", "free", "urgent", "wanted"]
 
 
 class Input(BaseModel):
@@ -38,7 +39,15 @@ class DevSessionInput(Input):
 
 
 class ProfileInput(Input):
-    display_name: str = Field(min_length=2, max_length=60)
+    display_name: str | None = Field(default=None, min_length=2, max_length=60)
+    campus_location: str | None = Field(default=None, min_length=2, max_length=160)
+
+    @field_validator("display_name", "campus_location")
+    @classmethod
+    def not_null(cls, value):
+        if value is None:
+            raise ValueError("This field cannot be null")
+        return value
 
 
 def valid_photo(value: str | None) -> str | None:
@@ -63,8 +72,18 @@ class ListingInput(Input):
     condition: Condition
     pickup_location: str = Field(min_length=2, max_length=160)
     image_url: str | None = Field(default=None, max_length=2048)
+    kind: ListingKind = "sale"
+    needs_repair: bool = False
 
     _photo = field_validator("image_url")(valid_photo)
+
+    @model_validator(mode="after")
+    def valid_kind_price(self):
+        if self.kind in {"free", "urgent", "wanted"} and self.price_cents != 0:
+            raise ValueError("Free items and requests must have a zero price")
+        if self.kind == "rent" and self.price_cents == 0:
+            raise ValueError("Rentals must have a positive daily price")
+        return self
 
 
 class ListingPatch(Input):
@@ -76,10 +95,12 @@ class ListingPatch(Input):
     pickup_location: str | None = Field(default=None, min_length=2, max_length=160)
     image_url: str | None = Field(default=None, max_length=2048)
     status: Status | None = None
+    kind: ListingKind | None = None
+    needs_repair: bool | None = None
 
     _photo = field_validator("image_url")(valid_photo)
 
-    @field_validator("title", "description", "price_cents", "category", "condition", "pickup_location", "status")
+    @field_validator("title", "description", "price_cents", "category", "condition", "pickup_location", "status", "kind", "needs_repair")
     @classmethod
     def not_null(cls, value):
         if value is None:
@@ -107,6 +128,8 @@ class User(PublicUser):
     email: str
     created_at: str
     dev_username: str | None = None
+    campus_location: str = "Campus Center"
+    iou_tickets: int = 0
 
 
 class DevStudent(BaseModel):
@@ -134,6 +157,9 @@ class Listing(BaseModel):
     created_at: str
     updated_at: str
     is_demo: bool
+    kind: ListingKind = "sale"
+    needs_repair: bool = False
+    rental_period: Literal["day"] | None = None
 
 
 class ConversationListing(BaseModel):
@@ -142,6 +168,8 @@ class ConversationListing(BaseModel):
     price_cents: int
     image_url: str | None
     status: Literal["available", "reserved", "sold", "removed"]
+    kind: ListingKind = "sale"
+    pickup_location: str = "Campus Center"
 
 
 class Conversation(BaseModel):
@@ -182,3 +210,88 @@ class AppConfig(BaseModel):
     verification_mode: Literal["domain_only"]
     demo_data: bool
     devmode: bool
+
+
+OrderStatus = Literal["requested", "accepted", "ready", "completed", "returned", "cancelled"]
+
+
+class OrderInput(Input):
+    message: str = Field(default="I would like to arrange pickup.", min_length=1, max_length=2000)
+    pickup_location: str | None = Field(default=None, min_length=2, max_length=160)
+
+
+class OrderPatch(Input):
+    status: OrderStatus | None = None
+    pickup_location: str | None = Field(default=None, min_length=2, max_length=160)
+
+    @field_validator("status", "pickup_location")
+    @classmethod
+    def not_null(cls, value):
+        if value is None:
+            raise ValueError("This field cannot be null")
+        return value
+
+
+class Order(BaseModel):
+    id: str
+    listing: Listing
+    buyer: PublicUser
+    seller: PublicUser
+    status: OrderStatus
+    pickup_location: str
+    conversation_id: str
+    created_at: str
+    updated_at: str
+
+
+class RepairerInput(Input):
+    specialties: list[str] = Field(min_length=1, max_length=8)
+    about: str = Field(min_length=10, max_length=2000)
+    rate_cents: int = Field(ge=0, le=100_000_000, strict=True)
+    portfolio_image_url: str | None = Field(default=None, max_length=2048)
+
+    _photo = field_validator("portfolio_image_url")(valid_photo)
+
+    @field_validator("specialties")
+    @classmethod
+    def clean_specialties(cls, value):
+        cleaned = list(dict.fromkeys(item.strip() for item in value))
+        if any(len(item) < 2 or len(item) > 60 for item in cleaned):
+            raise ValueError("Each specialty must be between 2 and 60 characters")
+        return cleaned
+
+
+class Repairer(BaseModel):
+    id: str
+    user: PublicUser
+    specialties: list[str]
+    about: str
+    rate_cents: int
+    portfolio_image_url: str | None
+    verification: Literal["self_reported"] = "self_reported"
+    created_at: str
+    updated_at: str
+
+
+RepairRequestStatus = Literal["requested", "accepted", "completed", "cancelled"]
+
+
+class RepairRequestInput(Input):
+    description: str = Field(min_length=10, max_length=2000)
+    location: str = Field(min_length=2, max_length=160)
+
+
+class RepairRequestPatch(Input):
+    status: RepairRequestStatus
+
+
+class RepairRequest(BaseModel):
+    id: str
+    repairer: Repairer
+    requester: PublicUser
+    description: str
+    location: str
+    status: RepairRequestStatus
+    conversation_id: str
+    created_at: str
+    updated_at: str

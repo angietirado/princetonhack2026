@@ -29,12 +29,13 @@ def check_student(client: httpx.Client, email: str, name: str) -> dict:
     return profile
 
 
-def create_listing(client: httpx.Client, title: str) -> dict:
+def create_listing(client: httpx.Client, title: str, **fields) -> dict:
     return expect(client.post("/api/listings", json={
         "title": title,
         "description": "A temporary listing created by the local integration smoke test.",
         "price_cents": 2500, "category": "books", "condition": "good",
         "pickup_location": "Campus library", "image_url": None,
+        **fields,
     }), 201)
 
 
@@ -74,8 +75,31 @@ def main() -> None:
             reverse = expect(first.post(f"/api/listings/{second_listing['id']}/conversations", json={"message": "I would like to buy your notes."}), 201)
             assert reverse["buyer"]["id"] == first_profile["id"]
             assert reverse["seller"]["id"] == second_profile["id"]
-            expect(first.patch(f"/api/listings/{listing['id']}", json={"status": "reserved"}), 200)
-            expect(first.patch(f"/api/listings/{listing['id']}", json={"status": "sold"}), 200)
+
+            # The partner UI coordinates pickup without accepting a payment.
+            order = expect(second.post(f"/api/listings/{listing['id']}/orders", json={"message": "Please reserve this for pickup."}), 201)
+            assert order["conversation_id"] == conversation_id
+            expect(other_browser.get(f"/api/orders/{order['id']}"), 404)
+            expect(first.patch(f"/api/orders/{order['id']}", json={"status": "accepted"}), 200)
+            expect(first.patch(f"/api/orders/{order['id']}", json={"status": "ready", "pickup_location": "Campus Center"}), 200)
+            expect(second.patch(f"/api/orders/{order['id']}", json={"status": "completed"}), 200)
+            assert expect(first.get(f"/api/listings/{listing['id']}"), 200)["status"] == "sold"
+
+            rental = create_listing(first, f"Smoke test rental {suffix}", kind="rent", price_cents=500)
+            owned.append((first, rental["id"]))
+            borrowed = expect(second.post(f"/api/listings/{rental['id']}/orders", json={}), 201)
+            for status in ("accepted", "ready"):
+                expect(first.patch(f"/api/orders/{borrowed['id']}", json={"status": status}), 200)
+            expect(second.patch(f"/api/orders/{borrowed['id']}", json={"status": "completed"}), 200)
+            expect(first.patch(f"/api/orders/{borrowed['id']}", json={"status": "returned"}), 200)
+            assert expect(first.get(f"/api/listings/{rental['id']}"), 200)["status"] == "available"
+
+            tickets = expect(first.get("/api/me"), 200)["iou_tickets"]
+            free = create_listing(first, f"Smoke test free item {suffix}", kind="free", price_cents=0)
+            owned.append((first, free["id"]))
+            assert expect(first.get("/api/me"), 200)["iou_tickets"] == tickets + 1
+            expect(first.patch("/api/me", json={"campus_location": "Campus Center"}), 200)
+            assert expect(first.get("/api/me"), 200)["campus_location"] == "Campus Center"
             assert not any(item["id"] == listing["id"] for item in expect(second.get("/api/listings", params={"q": suffix}), 200)["items"])
         finally:
             for owner, listing_id in owned:
@@ -98,7 +122,7 @@ def main() -> None:
             expect(first.delete("/api/student/session"), 204)
             expect(second.delete("/api/student/session"), 204)
             print("PASS: reusable development students and independent browser switching")
-    print("PASS: .edu check, real MongoDB, same-email browser isolation, both buying and selling, messages, listing controls, profile clearing")
+    print("PASS: .edu check, MongoDB, profile isolation, two-way trading, messages, pickup progress, rental returns, free-post tickets, location, listing cleanup")
 
 
 if __name__ == "__main__":
